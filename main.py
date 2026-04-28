@@ -34,6 +34,8 @@ class SanitizeRequest(BaseModel):
     tx_hash: str
     wallet_address: Optional[str] = None
 
+# ── TRIAL: contador por wallet ──────────────────────────────
+
 async def get_trial_count(wallet: str) -> int:
     async with httpx.AsyncClient() as client:
         r = await client.get(
@@ -53,14 +55,51 @@ async def increment_trial(wallet: str):
             json={"wallet_address": wallet}
         )
 
+# ── PAID: verificar y contar por tx_hash ───────────────────
+
 async def check_replay(tx_hash: str) -> bool:
+    """Verifica si el tx_hash existe en used_tx — primer uso."""
     async with httpx.AsyncClient() as client:
-        r = await client.post(
+        r = await client.get(
+            f"{SUPABASE_URL}/rest/v1/used_tx",
+            headers=SUPABASE_HEADERS,
+            params={"tx_hash": f"eq.{tx_hash}", "select": "tx_hash"}
+        )
+        if r.status_code == 200 and len(r.json()) > 0:
+            return True  # Ya existe — no es replay, es reutilización válida
+        return False  # No existe — primer uso
+
+async def register_tx_hash(tx_hash: str):
+    """Registra el tx_hash en used_tx la primera vez."""
+    async with httpx.AsyncClient() as client:
+        await client.post(
             f"{SUPABASE_URL}/rest/v1/used_tx",
             headers={**SUPABASE_HEADERS, "Prefer": "return=minimal"},
             json={"tx_hash": tx_hash}
         )
-        return r.status_code != 201
+
+async def get_paid_count(tx_hash: str) -> int:
+    """Cuenta cuántas sanitizaciones se han usado de este tx_hash."""
+    async with httpx.AsyncClient() as client:
+        r = await client.get(
+            f"{SUPABASE_URL}/rest/v1/paid_requests",
+            headers=SUPABASE_HEADERS,
+            params={"tx_hash": f"eq.{tx_hash}", "select": "id"}
+        )
+        if r.status_code == 200:
+            return len(r.json())
+        return 0
+
+async def increment_paid(tx_hash: str):
+    """Registra una sanitización usada contra este tx_hash."""
+    async with httpx.AsyncClient() as client:
+        await client.post(
+            f"{SUPABASE_URL}/rest/v1/paid_requests",
+            headers=SUPABASE_HEADERS,
+            json={"tx_hash": tx_hash}
+        )
+
+# ── HELIUS: verificar pago en Solana ───────────────────────
 
 async def helius_verify(tx_hash: str) -> tuple[bool, float]:
     url = f"https://api.helius.xyz/v0/addresses/{PAYMENT_WALLET}/transactions"
@@ -84,11 +123,17 @@ async def helius_verify(tx_hash: str) -> tuple[bool, float]:
                 continue
     return False, 0
 
+# ── GPT-4o-mini: sanitización multilingüe ──────────────────
+
 async def gpt_sanitize(text: str) -> dict:
     system_prompt = """Role: You are the "TrustBoost AI Sanitizer," a high-performance security layer for Autonomous Agents.
 Objective: Scan the provided text, replace sensitive data with [REDACTED], and categorize the security threat.
 Language Protocol: Detect language automatically. Return cleaned_text in SAME language as input.
-Apply country-specific PII patterns for Spanish LATAM, Portuguese Brazil/Portugal, German, Japanese.
+Apply country-specific PII patterns:
+- Spanish LATAM: RFC, CUIT, CUIL, RUT, DNI, CURP, Cedula, RUC
+- Portuguese Brazil/Portugal: CPF, CNPJ, RG, NIF, NUS
+- German: Personalausweis, Steuernummer, IBAN DE, Reisepass
+- Japanese: マイナンバー, 運転免許証, パスポート番号, 住所
 Risk: CRITICAL=keys/passwords/cards. PRIVATE=emails/IDs/phones. SENSITIVE=handles/locations.
 Output ONLY valid JSON: {"status":"success","cleaned_text":"...","entities_removed":true,"safety_score":0.0,"risk_category":"CRITICAL"}
 If empty input: {"status":"empty_input"}"""
@@ -102,6 +147,8 @@ If empty input: {"status":"empty_input"}"""
         ]
     )
     return json.loads(r.choices[0].message.content)
+
+# ── Audit trail en Supabase ────────────────────────────────
 
 async def log_audit(tx_hash, length, sanitized, score, category, wallet, license_type):
     async with httpx.AsyncClient() as client:
@@ -120,6 +167,8 @@ async def log_audit(tx_hash, length, sanitized, score, category, wallet, license
             }
         )
 
+# ── Health check ───────────────────────────────────────────
+
 @app.get("/health")
 async def health():
     return JSONResponse(
@@ -128,17 +177,22 @@ async def health():
             "status": "ok",
             "version": "2.0.0",
             "service": "TrustBoost-PII-Sanitizer",
-            "infrastructure": "FastAPI+Supabase+Railway"
+            "infrastructure": "FastAPI+Supabase+Render"
         }
     )
 
+# ── Endpoint principal ─────────────────────────────────────
+
 @app.post("/sanitize")
 async def sanitize(req: SanitizeRequest):
+
+    # Validación básica
     if not req.text or not req.text.strip():
         return JSONResponse(status_code=200, content={"status": "empty_input"})
 
     wallet = req.wallet_address or "anonymous"
 
+    # ── Modo TRIAL ─────────────────────────────────────────
     if req.tx_hash.upper() == "TRIAL":
         used = await get_trial_count(wallet)
         if used >= TRIAL_QUOTA:
@@ -169,47 +223,67 @@ async def sanitize(req: SanitizeRequest):
         await increment_trial(wallet)
         quota_remaining = TRIAL_QUOTA - (used + 1)
         license_type = "TRIAL"
+
+    # ── Modo PAGADO ────────────────────────────────────────
     else:
-        if await check_replay(req.tx_hash):
-            return JSONResponse(
-                status_code=409,
-                content={
-                    "status": "error",
-                    "request_id": req.tx_hash,
-                    "code": "TX_HASH_ALREADY_USED",
-                    "message": "This transaction hash has already been used.",
-                    "payment_info": {
-                        "amount_required": 149,
-                        "currency": "USDC",
-                        "network": "solana",
-                        "payment_address": PAYMENT_WALLET
+        tx_exists = await check_replay(req.tx_hash)
+
+        if tx_exists:
+            # tx_hash ya verificado antes — solo contar uso
+            paid_used = await get_paid_count(req.tx_hash)
+            if paid_used >= PAID_QUOTA:
+                return JSONResponse(
+                    status_code=402,
+                    content={
+                        "status": "error",
+                        "request_id": req.tx_hash,
+                        "code": "QUOTA_EXHAUSTED_OR_PAYMENT_REQUIRED",
+                        "message": "Paid quota exhausted (10,000 sanitizations used). Send a new 149 USDC payment.",
+                        "payment_info": {
+                            "amount_required": 149,
+                            "currency": "USDC",
+                            "network": "solana",
+                            "payment_address": PAYMENT_WALLET
+                        },
+                        "next_steps": [
+                            {"action": "send_payment", "description": "Send 149 USDC on Solana Mainnet"},
+                            {"action": "retry_with_tx_hash", "description": "Resubmit with new transaction signature"}
+                        ]
                     }
-                }
-            )
-        valid, amount = await helius_verify(req.tx_hash)
-        if not valid:
-            return JSONResponse(
-                status_code=402,
-                content={
-                    "status": "error",
-                    "request_id": req.tx_hash,
-                    "code": "QUOTA_EXHAUSTED_OR_PAYMENT_REQUIRED",
-                    "message": "Payment insufficient. Send 149 USDC on Solana to continue.",
-                    "payment_info": {
-                        "amount_required": 149,
-                        "currency": "USDC",
-                        "network": "solana",
-                        "payment_address": PAYMENT_WALLET
-                    },
-                    "next_steps": [
-                        {"action": "send_payment", "description": "Send 149 USDC on Solana Mainnet"},
-                        {"action": "retry_with_tx_hash", "description": "Resubmit with Solana transaction signature"}
-                    ]
-                }
-            )
-        quota_remaining = PAID_QUOTA - 1
+                )
+            quota_remaining = PAID_QUOTA - (paid_used + 1)
+
+        else:
+            # Primer uso de este tx_hash — verificar pago en Helius
+            valid, amount = await helius_verify(req.tx_hash)
+            if not valid:
+                return JSONResponse(
+                    status_code=402,
+                    content={
+                        "status": "error",
+                        "request_id": req.tx_hash,
+                        "code": "QUOTA_EXHAUSTED_OR_PAYMENT_REQUIRED",
+                        "message": "Payment insufficient. Send 149 USDC on Solana to continue.",
+                        "payment_info": {
+                            "amount_required": 149,
+                            "currency": "USDC",
+                            "network": "solana",
+                            "payment_address": PAYMENT_WALLET
+                        },
+                        "next_steps": [
+                            {"action": "send_payment", "description": "Send 149 USDC on Solana Mainnet"},
+                            {"action": "retry_with_tx_hash", "description": "Resubmit with Solana transaction signature"}
+                        ]
+                    }
+                )
+            # Pago verificado — registrar tx_hash
+            await register_tx_hash(req.tx_hash)
+            quota_remaining = PAID_QUOTA - 1
+
+        await increment_paid(req.tx_hash)
         license_type = "Enterprise - 149 USDC"
 
+    # ── Sanitización ───────────────────────────────────────
     result = await gpt_sanitize(req.text)
     if result.get("status") == "empty_input":
         return JSONResponse(status_code=200, content={"status": "empty_input"})
@@ -219,8 +293,10 @@ async def sanitize(req: SanitizeRequest):
     category = result.get("risk_category", "SENSITIVE")
     entities = result.get("entities_removed", False)
 
+    # ── Audit trail ────────────────────────────────────────
     await log_audit(req.tx_hash, len(req.text), sanitized, score, category, wallet, license_type)
 
+    # ── Respuesta final ────────────────────────────────────
     return JSONResponse(
         status_code=200,
         content={
