@@ -1,13 +1,23 @@
 import os
 import json
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, List, Literal
 import httpx
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 from dotenv import load_dotenv
+
+# ── Risk weights — server-side, deterministic ──────────────
+# Used to compute safety_score from the entity list returned by the model,
+# so scoring no longer depends on the model doing arithmetic correctly.
+RISK_WEIGHTS = {
+    "CRITICAL": 0.40,
+    "PRIVATE": 0.20,
+    "SENSITIVE": 0.05,
+}
+RISK_ORDER = ["CRITICAL", "PRIVATE", "SENSITIVE"]
 
 load_dotenv()
 
@@ -21,7 +31,7 @@ PAID_QUOTA            = int(os.getenv("PAID_QUOTA", "10000"))
 REQUIRED_PAYMENT_USDC = int(os.getenv("REQUIRED_PAYMENT_USDC", "149"))
 
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-app = FastAPI(title="TrustBoost PII Sanitizer v2.0")
+app = FastAPI(title="TrustBoost PII Sanitizer v2.1")
 
 SUPABASE_HEADERS = {
     "apikey": SUPABASE_KEY,
@@ -33,6 +43,20 @@ class SanitizeRequest(BaseModel):
     text: str
     tx_hash: str
     wallet_address: Optional[str] = None
+
+
+class Entity(BaseModel):
+    """A single PII entity detected in the input.
+
+    `type` is a short machine-friendly label (e.g. "email", "aws_access_key",
+    "jp_my_number", "jp_full_name"). `category` is the risk tier used for
+    scoring. `redacted_text` is the original substring that was replaced with
+    [REDACTED]; it is returned so callers can audit *what* was removed without
+    having to diff input vs output. Callers that don't need it can ignore it.
+    """
+    type: str
+    category: Literal["CRITICAL", "PRIVATE", "SENSITIVE"]
+    redacted_text: str
 
 # ── TRIAL: contador por wallet ──────────────────────────────
 
@@ -129,7 +153,7 @@ async def gpt_sanitize(text: str) -> dict:
     system_prompt = """You are TrustBoost AI Sanitizer — a precision PII redaction engine for autonomous AI agent pipelines. Your sole function is to detect and neutralize Personally Identifiable Information before it reaches LLM providers.
 
 ## CORE DIRECTIVE
-Scan the input text, replace ALL detected PII with the literal tag [REDACTED], and return a structured JSON assessment. Preserve the original language, tone, structure, and non-PII content exactly.
+Scan the input text, replace ALL detected PII with the literal tag [REDACTED], and return a structured JSON assessment listing every entity you redacted. Preserve the original language, tone, structure, and non-PII content exactly.
 
 ## CONSERVATIVE REDACTION PRINCIPLE
 When uncertain whether a pattern is PII: REDACT IT.
@@ -209,7 +233,20 @@ Apply the country-specific patterns for the detected language.
 - 健康保険証番号 (Health Insurance): various formats
 - 電話番号 (Phone): 0X-XXXX-XXXX, 0XX-XXX-XXXX, 080/090/070 mobile
 - 住所 (Address): patterns with 都道府県 (prefecture), 市区町村 (city/ward), 丁目番地号
-- 氏名 (Full name): kanji name patterns in personal data context
+- 氏名 (Full name): Japanese personal-name patterns in personal-data context.
+  This INCLUDES, but is not limited to:
+    * Kanji full names: 姓 + 名 (e.g. 田中太郎, 鈴木一郎, 佐藤花子, 山田太郎)
+    * Kanji surname followed by katakana/hiragana given name (e.g. 田中タロウ)
+    * Full names written entirely in katakana (e.g. タナカタロウ)
+    * Full names written entirely in hiragana (e.g. たなかたろう)
+  ALWAYS redact a Japanese personal name when it appears next to, or in the
+  same record as, ANY other PII (My Number, phone, address, email, ID number,
+  health insurance number, or a 「、」/「：」-delimited personal record).
+  Examples that MUST be redacted as 氏名:
+    * "田中太郎、マイナンバー：123456789012"  →  both 田中太郎 and the number
+    * "氏名：鈴木一郎  電話：090-1234-5678"  →  both the name and the phone
+    * "佐藤花子さんの住所は東京都..."        →  the name and the address
+  When in doubt about a Japanese name, REDACT.
 
 ## RISK CLASSIFICATION
 
@@ -232,13 +269,11 @@ dates of birth, age combined with other identifiers
 ### CLEAN (safety_score: 0.0)
 No PII detected — text is safe for LLM processing
 
-## SAFETY SCORE CALCULATION
-- Start at 0.0
-- Add 0.40 per CRITICAL entity detected (cap at 1.0)
-- Add 0.20 per PRIVATE entity detected (cap at 1.0)
-- Add 0.05 per SENSITIVE entity detected (cap at 1.0)
-- Final score = minimum of calculated sum and 1.0
-- risk_category = highest severity category with at least one detection
+## SAFETY SCORE
+Do NOT compute or return safety_score or risk_category yourself.
+The server computes them deterministically from the `entities` array you return.
+Your job is to detect entities accurately and classify each one's category;
+the arithmetic is not your responsibility.
 
 ## SPECIAL HANDLING RULES
 
@@ -258,9 +293,24 @@ Success schema:
 {
   "status": "success",
   "cleaned_text": "The sanitized text with [REDACTED] tags",
-  "entities_removed": true,
-  "safety_score": 0.0,
-  "risk_category": "CRITICAL"
+  "entities": [
+    {
+      "type": "<short machine label, e.g. email | aws_access_key | jp_my_number | jp_full_name | mx_rfc | mx_phone | iban | credit_card | api_key_openai | api_key_anthropic | crypto_wallet | ip_address | ssn | cpf | dni | ...>",
+      "category": "CRITICAL | PRIVATE | SENSITIVE",
+      "redacted_text": "<the exact original substring that was replaced with [REDACTED]>"
+    }
+  ]
+}
+
+The `entities` array MUST contain one element for every [REDACTED] tag in
+`cleaned_text`. If you redact two emails, return two entity objects. Do not
+deduplicate. Do not summarize. Do not include entities you did NOT redact.
+
+If no PII is detected, return:
+{
+  "status": "success",
+  "cleaned_text": "<input unchanged>",
+  "entities": []
 }
 
 Empty input schema:
@@ -279,12 +329,76 @@ Empty input schema:
         model="gpt-4o-mini",
         temperature=0,
         max_tokens=1000,
+        response_format={"type": "json_object"},
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": text}
         ]
     )
-    return json.loads(r.choices[0].message.content)
+    raw = r.choices[0].message.content or ""
+    return _parse_model_json(raw, original_text=text)
+
+
+def _parse_model_json(raw: str, original_text: str) -> dict:
+    """Parse the model's JSON response defensively.
+
+    OpenAI's `response_format=json_object` constraint should already make
+    `raw` a JSON object, but a malformed response should never 500 the API —
+    sanitization failures must fail SAFE (treat the whole input as unredacted
+    PII) rather than risk leaking it. Strategy:
+      1. Try strict json.loads.
+      2. Fall back to extracting the first {...} block.
+      3. Final fallback: redact the entire input as a single CRITICAL entity.
+         Intentionally conservative — over-redact rather than silently leak.
+    """
+    try:
+        return json.loads(raw)
+    except Exception:
+        pass
+    try:
+        start = raw.find("{")
+        end = raw.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            return json.loads(raw[start:end + 1])
+    except Exception:
+        pass
+    return {
+        "status": "success",
+        "cleaned_text": "[REDACTED]",
+        "entities": [
+            {
+                "type": "sanitizer_failsafe",
+                "category": "CRITICAL",
+                "redacted_text": original_text,
+            }
+        ],
+    }
+
+
+# ── Server-side scoring ───────────────────────────────────
+
+def compute_score(entities: list) -> tuple[float, str]:
+    """Compute (safety_score, risk_category) deterministically from entities.
+
+    Score: sum of per-category weights, capped at 1.0.
+    Category: highest-severity tier with at least one entity, or "CLEAN".
+    Unknown categories are treated as SENSITIVE (conservative).
+    """
+    if not entities:
+        return 0.0, "CLEAN"
+    score = 0.0
+    seen = set()
+    for ent in entities:
+        cat = (ent.get("category") or "").upper()
+        if cat not in RISK_WEIGHTS:
+            cat = "SENSITIVE"
+        score += RISK_WEIGHTS[cat]
+        seen.add(cat)
+    score = min(round(score, 4), 1.0)
+    for tier in RISK_ORDER:  # CRITICAL > PRIVATE > SENSITIVE
+        if tier in seen:
+            return score, tier
+    return score, "SENSITIVE"
 
 # ── Audit trail en Supabase ────────────────────────────────
 
@@ -313,7 +427,7 @@ async def health():
         status_code=200,
         content={
             "status": "ok",
-            "version": "2.0.0",
+            "version": "2.1.0",
             "service": "TrustBoost-PII-Sanitizer",
             "infrastructure": "FastAPI+Supabase+Render"
         }
@@ -427,14 +541,34 @@ async def sanitize(req: SanitizeRequest):
         return JSONResponse(status_code=200, content={"status": "empty_input"})
 
     sanitized = result.get("cleaned_text", "")
-    score = float(result.get("safety_score", 0.0))
-    category = result.get("risk_category", "SENSITIVE")
-    entities = result.get("entities_removed", False)
+
+    # Normalize entity list: tolerate the model omitting it, returning a dict
+    # instead of a list, or returning entries with missing fields.
+    raw_entities = result.get("entities")
+    entities_list: list = []
+    if isinstance(raw_entities, list):
+        for ent in raw_entities:
+            if not isinstance(ent, dict):
+                continue
+            cat = (ent.get("category") or "").upper()
+            if cat not in RISK_WEIGHTS:
+                cat = "SENSITIVE"
+            entities_list.append({
+                "type": str(ent.get("type") or "unknown"),
+                "category": cat,
+                "redacted_text": str(ent.get("redacted_text") or ""),
+            })
+
+    # Server-side score — deterministic, computed from entity list.
+    score, category = compute_score(entities_list)
+    entities_removed = len(entities_list) > 0
 
     # ── Audit trail ────────────────────────────────────────
     await log_audit(req.tx_hash, len(req.text), sanitized, score, category, wallet, license_type)
 
     # ── Respuesta final ────────────────────────────────────
+    # Backwards-compatible: keeps `entities_removed` (bool), `safety_score`,
+    # and `risk_category`. Adds `entities` (structured array) alongside.
     return JSONResponse(
         status_code=200,
         content={
@@ -445,7 +579,8 @@ async def sanitize(req: SanitizeRequest):
                 "sanitized_content": sanitized,
                 "safety_score": score,
                 "risk_category": category,
-                "entities_removed": entities,
+                "entities_removed": entities_removed,
+                "entities": entities_list,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "usage_metrics": {
                     "quota_remaining": quota_remaining,
