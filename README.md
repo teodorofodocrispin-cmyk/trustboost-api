@@ -24,7 +24,7 @@ Trial mode (`tx_hash="TRIAL"`) gives 50 free sanitizations per `wallet_address`.
 Paid mode requires 149 USDC on Solana to the configured payment wallet, which
 unlocks 10,000 sanitizations per transaction signature.
 
-## Response schema (v2.1)
+## Response schema (v2.2)
 
 ```json
 {
@@ -40,6 +40,7 @@ unlocks 10,000 sanitizations per transaction signature.
       { "type": "email",          "category": "PRIVATE",  "redacted_text": "jane@example.com" },
       { "type": "aws_access_key", "category": "CRITICAL", "redacted_text": "AKIAIOSFODNN7EXAMPLE" }
     ],
+    "redaction_source": "server",
     "timestamp": "2026-05-03T23:48:14.500705+00:00",
     "usage_metrics": { "quota_remaining": 48, "quota_limit": 50 }
   },
@@ -56,6 +57,8 @@ unlocks 10,000 sanitizations per transaction signature.
 | `safety_score`     | `float` 0.0 – 1.0    | **Server-side, deterministic.** Computed from `entities`, not the model. |
 | `risk_category`    | `CRITICAL`/`PRIVATE`/`SENSITIVE`/`CLEAN` | Highest tier present in `entities`.                  |
 | `entities_removed` | `bool`               | Convenience: `true` iff `entities` is non-empty.                         |
+| `redaction_source` | `"model" \| "server" \| "fallback_full_redaction"` | Telemetry: who actually performed the redaction (see below).                 |
+| `unmatched_entities` | `Entity[]` (optional) | Entities the model reported but whose `redacted_text` wasn't found verbatim in the input. Omitted when empty. |
 
 ### Risk weights
 
@@ -67,6 +70,40 @@ unlocks 10,000 sanitizations per transaction signature.
 
 `risk_category` is the highest-severity tier with at least one entity, or
 `"CLEAN"` if `entities` is empty.
+
+## Server-side redaction enforcement (v2.2)
+
+The model returns two things that have to agree: `cleaned_text` and
+`entities`. In practice they sometimes disagree — the model can correctly
+identify an entity in `entities` but fail to actually replace it in
+`cleaned_text`. That produces a `sanitized_content` that still leaks PII
+while the audit trail says everything is fine, which is worse than no audit
+trail.
+
+v2.2 fixes this structurally. The model is now treated purely as a
+*detector*: it returns the entity list. The server is the *redactor*: for
+every entity whose `redacted_text` is a non-empty substring of the original
+input, the server replaces **all** occurrences with `[REDACTED]`. Long
+entities are processed before short ones to avoid partial overlap.
+
+Conservative redaction by design: if the same value (e.g. `田中太郎`)
+appears twice in the input, both occurrences are scrubbed.
+
+The `redaction_source` field tells you what happened:
+
+- `"model"` — the model's `cleaned_text` already matched the entity list,
+  so server-side enforcement was a no-op (the model did its job).
+- `"server"` — the server-side enforcer replaced one or more entities the
+  model failed to remove. Track this metric over time as a model-reliability
+  signal: a rising `server` rate means the prompt or model is drifting.
+- `"fallback_full_redaction"` — the model returned malformed JSON; the
+  failsafe parser triggered and the entire input was redacted as a single
+  `CRITICAL` entity. Should be near-zero in steady state.
+
+When the model's `redacted_text` does not appear verbatim in the input
+(paraphrasing, normalization, or hallucination), the entity is preserved in
+`entities` (and counts toward `safety_score`) but is also returned in
+`unmatched_entities` so callers can audit it.
 
 ## Failure mode: fail-safe, not fail-open
 
@@ -115,5 +152,6 @@ identifier so they don't share quota with developer wallets.
 
 ## Versioning
 
+- **2.2** — server-side redaction enforcer, `redaction_source` telemetry, `unmatched_entities` audit field. Conservative replace-all-occurrences. Fixes the v2.1 class of bug where an entity could appear in `entities[]` without being removed from `sanitized_content`.
 - **2.1** — structured `entities` array, server-side deterministic scoring, hardened JSON parsing, improved Japanese 氏名 detection.
 - **2.0** — multilingual prompt rewrite.
