@@ -31,7 +31,7 @@ PAID_QUOTA            = int(os.getenv("PAID_QUOTA", "10000"))
 REQUIRED_PAYMENT_USDC = int(os.getenv("REQUIRED_PAYMENT_USDC", "149"))
 
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-app = FastAPI(title="TrustBoost PII Sanitizer v2.1")
+app = FastAPI(title="TrustBoost PII Sanitizer v2.2")
 
 SUPABASE_HEADERS = {
     "apikey": SUPABASE_KEY,
@@ -375,6 +375,89 @@ def _parse_model_json(raw: str, original_text: str) -> dict:
     }
 
 
+# ── Server-side redaction enforcer ──────────────────────
+#
+# Why this exists:
+#   The model returns two things that have to agree: `cleaned_text` (the
+#   redacted string) and `entities` (the list of what was redacted). In
+#   practice they sometimes disagree — the model can correctly identify an
+#   entity in `entities` but fail to actually replace it in `cleaned_text`,
+#   producing a sanitized_content that still leaks PII while the audit trail
+#   says everything's fine. That's worse than no audit trail.
+#
+# What it does:
+#   For every entity whose `redacted_text` is a non-empty substring of the
+#   ORIGINAL input, replace ALL occurrences with [REDACTED] in cleaned_text.
+#   Long entities are processed first so a phone number is not partially
+#   eaten by an overlapping shorter entity.
+#
+# Conservative redaction:
+#   If `田中太郎` appears twice in the input, both occurrences are replaced.
+#   The same `redacted_text` listed twice in `entities` is fine; replacement
+#   is idempotent (`[REDACTED]` cannot match any entity literally).
+#
+# Telemetry:
+#   Returns a `redaction_source` string: "server" if the enforcer had to
+#   replace anything the model missed, "model" if the model and server agree.
+#   The `fallback_full_redaction` value is set elsewhere (in the handler)
+#   when the failsafe parser triggers — the enforcer never sets it.
+#
+# Failure modes:
+#   - Empty `redacted_text`: skipped (can't replace nothing).
+#   - `redacted_text` not present in original input: returned in
+#     `unmatched_entities` so callers can audit. The model probably
+#     paraphrased the redacted_text or hallucinated; the entity is still
+#     reported (and counts toward the score) but cannot be enforced from text.
+
+def enforce_redaction(
+    original_text: str,
+    model_cleaned_text: str,
+    entities: list,
+) -> tuple[str, str, list]:
+    """Apply entity list to original text; return (cleaned_text, source, unmatched).
+
+    `source` is "model" when the server-enforced cleaned_text matches what
+    the model produced (i.e. the model already did the redaction correctly),
+    or "server" when the enforcer had to fix one or more leaks.
+
+    `unmatched` is a list of entity dicts whose `redacted_text` could not be
+    located verbatim in the original input. They still appear in the main
+    `entities` list and still count toward the safety score; this auxiliary
+    list exists so callers can detect model paraphrasing or hallucination.
+    """
+    REDACTED = "[REDACTED]"
+
+    # Sort by descending length so longer entities are replaced first.
+    # This matters when one entity's text contains another's (e.g. a full
+    # phone number that includes a country-code substring also flagged).
+    targets = sorted(
+        (e for e in entities if isinstance(e, dict) and (e.get("redacted_text") or "")),
+        key=lambda e: len(e.get("redacted_text") or ""),
+        reverse=True,
+    )
+
+    cleaned = original_text
+    unmatched: list = []
+    seen_targets: set = set()
+
+    for ent in targets:
+        needle = ent.get("redacted_text") or ""
+        if needle in seen_targets:
+            continue  # already replaced this exact substring on a prior pass
+        seen_targets.add(needle)
+        if needle in original_text:
+            # Replace ALL occurrences — conservative redaction. If 田中太郎
+            # appears twice in the original, both are scrubbed.
+            cleaned = cleaned.replace(needle, REDACTED)
+        else:
+            # Model said it redacted X but X never appears in the input.
+            # Could be paraphrasing, normalization, or hallucination.
+            unmatched.append(ent)
+
+    source = "model" if cleaned == model_cleaned_text else "server"
+    return cleaned, source, unmatched
+
+
 # ── Server-side scoring ───────────────────────────────────
 
 def compute_score(entities: list) -> tuple[float, str]:
@@ -427,7 +510,7 @@ async def health():
         status_code=200,
         content={
             "status": "ok",
-            "version": "2.1.0",
+            "version": "2.2.0",
             "service": "TrustBoost-PII-Sanitizer",
             "infrastructure": "FastAPI+Supabase+Render"
         }
@@ -540,7 +623,7 @@ async def sanitize(req: SanitizeRequest):
     if result.get("status") == "empty_input":
         return JSONResponse(status_code=200, content={"status": "empty_input"})
 
-    sanitized = result.get("cleaned_text", "")
+    model_cleaned = result.get("cleaned_text", "") or ""
 
     # Normalize entity list: tolerate the model omitting it, returning a dict
     # instead of a list, or returning entries with missing fields.
@@ -559,6 +642,25 @@ async def sanitize(req: SanitizeRequest):
                 "redacted_text": str(ent.get("redacted_text") or ""),
             })
 
+    # Detect failsafe path — the parser sets a single sanitizer_failsafe
+    # entity covering the whole input. Don't run the enforcer in that case;
+    # the failsafe `cleaned_text` is already "[REDACTED]".
+    is_failsafe = (
+        len(entities_list) == 1
+        and entities_list[0].get("type") == "sanitizer_failsafe"
+    )
+
+    if is_failsafe:
+        sanitized = model_cleaned or "[REDACTED]"
+        redaction_source = "fallback_full_redaction"
+        unmatched_entities: list = []
+    else:
+        sanitized, redaction_source, unmatched_entities = enforce_redaction(
+            original_text=req.text,
+            model_cleaned_text=model_cleaned,
+            entities=entities_list,
+        )
+
     # Server-side score — deterministic, computed from entity list.
     score, category = compute_score(entities_list)
     entities_removed = len(entities_list) > 0
@@ -567,26 +669,32 @@ async def sanitize(req: SanitizeRequest):
     await log_audit(req.tx_hash, len(req.text), sanitized, score, category, wallet, license_type)
 
     # ── Respuesta final ────────────────────────────────────
-    # Backwards-compatible: keeps `entities_removed` (bool), `safety_score`,
-    # and `risk_category`. Adds `entities` (structured array) alongside.
+    # Backwards-compatible. New fields:
+    #   redaction_source     — "model" | "server" | "fallback_full_redaction"
+    #   unmatched_entities[] — entities whose redacted_text wasn't found
+    #                          verbatim in the input (omitted when empty)
+    data = {
+        "message": "Content successfully sanitized and logged.",
+        "sanitized_content": sanitized,
+        "safety_score": score,
+        "risk_category": category,
+        "entities_removed": entities_removed,
+        "entities": entities_list,
+        "redaction_source": redaction_source,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "usage_metrics": {
+            "quota_remaining": quota_remaining,
+            "quota_limit": PAID_QUOTA if license_type != "TRIAL" else TRIAL_QUOTA,
+        },
+    }
+    if unmatched_entities:
+        data["unmatched_entities"] = unmatched_entities
     return JSONResponse(
         status_code=200,
         content={
             "status": "success",
             "request_id": req.tx_hash,
-            "data": {
-                "message": "Content successfully sanitized and logged.",
-                "sanitized_content": sanitized,
-                "safety_score": score,
-                "risk_category": category,
-                "entities_removed": entities_removed,
-                "entities": entities_list,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "usage_metrics": {
-                    "quota_remaining": quota_remaining,
-                    "quota_limit": PAID_QUOTA if license_type != "TRIAL" else TRIAL_QUOTA
-                }
-            },
-            "billing": {"license_type": license_type, "status": "active"}
-        }
+            "data": data,
+            "billing": {"license_type": license_type, "status": "active"},
+        },
     )
