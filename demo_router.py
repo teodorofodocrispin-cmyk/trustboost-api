@@ -76,7 +76,7 @@ async def sanitize_preview(payload: PreviewRequest, request: Request):
     try:
         result = await gpt_sanitize(payload.text)
         entities = result.get("entities", [])
-        sanitized = enforce_redaction(payload.text, result.get("cleaned_text", ""), entities)
+        sanitized, _, _ = enforce_redaction(payload.text, result.get("cleaned_text", ""), entities)
         score, category = compute_score(entities)
     except Exception:
         raise HTTPException(status_code=503, detail="Service temporarily unavailable.")
