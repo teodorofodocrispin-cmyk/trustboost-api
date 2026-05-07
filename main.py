@@ -33,6 +33,9 @@ REQUIRED_PAYMENT_USDC = int(os.getenv("REQUIRED_PAYMENT_USDC", "149"))
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 app = FastAPI(title="TrustBoost PII Sanitizer v2.2")
 
+from demo_router import router as demo_router
+app.include_router(demo_router)
+
 SUPABASE_HEADERS = {
     "apikey": SUPABASE_KEY,
     "Authorization": f"Bearer {SUPABASE_KEY}",
