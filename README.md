@@ -8,6 +8,30 @@ and Japanese.
 - **Endpoint:** `https://api.trustboost.dev/sanitize`
 - **Stack:** FastAPI · OpenAI `gpt-4o-mini` (temperature 0) · Supabase · Solana payments via Helius
 
+## Try it in 10 seconds — no wallet needed
+
+```bash
+curl -X POST https://api.trustboost.dev/sanitize/preview \
+  -H "Content-Type: application/json" \
+  -d '{"text": "My name is John Doe, email john@gmail.com, SSN 123-45-6789"}'
+```
+
+```json
+{
+  "sanitized_content": "My name is [REDACTED], email [REDACTED], SSN [REDACTED]",
+  "safety_score": 0.6,
+  "risk_category": "PRIVATE",
+  "demo": true,
+  "requests_remaining": 2,
+  "next": "https://github.com/teodorofodocrispin-cmyk/TrustBoost-PII-Sanitizer#trial"
+}
+```
+
+3 free previews per IP · no account · no wallet · no setup.
+Ready for more? See [Trial mode](#trial) below — 50 free sanitizations with a Solana wallet.
+
+---
+
 ## Quick start
 
 ```bash
