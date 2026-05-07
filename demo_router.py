@@ -6,7 +6,6 @@ import asyncio
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel
-import httpx
 import os
 
 router = APIRouter()
@@ -17,9 +16,7 @@ PREVIEW_LIMIT = 3
 WINDOW_HOURS = 24
 COOLDOWN_HOURS = 4
 
-INTERNAL_SANITIZE_URL = "http://localhost:8000/sanitize"
 TRIAL_URL = "https://github.com/teodorofodocrispin-cmyk/TrustBoost-PII-Sanitizer#trial"
-TRIAL_TX = os.getenv("TRIAL_TX_HASH", "TRIAL")
 
 
 class PreviewRequest(BaseModel):
@@ -58,6 +55,8 @@ def _check_rate_limit(ip: str) -> tuple[bool, bool]:
 
 @router.post("/sanitize/preview")
 async def sanitize_preview(payload: PreviewRequest, request: Request):
+    from main import gpt_sanitize, enforce_redaction, compute_score
+
     ip = _get_client_ip(request)
     allowed, in_cooldown = _check_rate_limit(ip)
 
@@ -74,23 +73,21 @@ async def sanitize_preview(payload: PreviewRequest, request: Request):
             "next": TRIAL_URL
         })
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        try:
-            response = await client.post(
-                INTERNAL_SANITIZE_URL,
-                json={"text": payload.text, "tx_hash": TRIAL_TX, "wallet_address": "preview"}
-            )
-            result = response.json()
-        except Exception:
-            raise HTTPException(status_code=503, detail="Service temporarily unavailable.")
+    try:
+        result = await gpt_sanitize(payload.text)
+        entities = result.get("entities", [])
+        sanitized = enforce_redaction(payload.text, result.get("cleaned_text", ""), entities)
+        score, category = compute_score(entities)
+    except Exception:
+        raise HTTPException(status_code=503, detail="Service temporarily unavailable.")
 
     ip_record = _rate_store.get(ip, {})
     remaining = max(0, PREVIEW_LIMIT - ip_record.get("count", 0))
 
     return {
-        "sanitized_content": result.get("sanitized_content", ""),
-        "safety_score": result.get("safety_score", 0.0),
-        "risk_category": result.get("risk_category", "UNKNOWN"),
+        "sanitized_content": sanitized,
+        "safety_score": score,
+        "risk_category": category,
         "demo": True,
         "requests_remaining": remaining,
         "next": TRIAL_URL
