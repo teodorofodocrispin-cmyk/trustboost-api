@@ -35,6 +35,7 @@ def _check_rate_limit(ip: str) -> tuple[bool, bool]:
     record = _rate_store.get(ip)
 
     if record is None:
+        import logging; logging.getLogger("trustboost.preview").info(f"[PREVIEW] new IP: {ip}")
         _rate_store[ip] = {"count": 1, "window_start": now, "cooldown_until": None}
         return True, False
 
