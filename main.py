@@ -3,11 +3,40 @@ import json
 from datetime import datetime, timezone
 from typing import Optional, List, Literal
 import httpx
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 from dotenv import load_dotenv
+
+# ── TRIAL rate limiting — 5 requests per IP per hour ──────────
+from collections import defaultdict
+from datetime import timedelta
+
+_trial_rate_store: dict = {}
+TRIAL_RATE_LIMIT = 5
+TRIAL_RATE_WINDOW_MINUTES = 60
+
+def _check_trial_rate_limit(ip: str) -> tuple[bool, int]:
+    """Returns (is_allowed, minutes_until_reset)"""
+    now = datetime.now(timezone.utc)
+    record = _trial_rate_store.get(ip)
+
+    if record is None:
+        _trial_rate_store[ip] = {"count": 1, "window_start": now}
+        return True, 0
+
+    elapsed = (now - record["window_start"]).total_seconds() / 60
+    if elapsed >= TRIAL_RATE_WINDOW_MINUTES:
+        _trial_rate_store[ip] = {"count": 1, "window_start": now}
+        return True, 0
+
+    if record["count"] < TRIAL_RATE_LIMIT:
+        record["count"] += 1
+        return True, 0
+
+    minutes_left = int(TRIAL_RATE_WINDOW_MINUTES - elapsed)
+    return False, minutes_left
 
 # ── Risk weights — server-side, deterministic ──────────────
 # Used to compute safety_score from the entity list returned by the model,
@@ -522,13 +551,30 @@ async def health():
 # ── Endpoint principal ─────────────────────────────────────
 
 @app.post("/sanitize")
-async def sanitize(req: SanitizeRequest):
+async def sanitize(req: SanitizeRequest, request: Request):
 
     # Validación básica
     if not req.text or not req.text.strip():
         return JSONResponse(status_code=200, content={"status": "empty_input"})
 
     wallet = req.wallet_address or "anonymous"
+
+    # ── TRIAL rate limiting por IP ────────────────────────────
+    if req.tx_hash.upper() == "TRIAL":
+        forwarded = request.headers.get("x-forwarded-for")
+        client_ip = forwarded.split(",")[0].strip() if forwarded else (request.client.host if request.client else "unknown")
+        allowed, minutes_left = _check_trial_rate_limit(client_ip)
+        if not allowed:
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "status": "error",
+                    "code": "RATE_LIMIT_EXCEEDED",
+                    "message": f"Maximum {TRIAL_RATE_LIMIT} TRIAL requests per hour per IP.",
+                    "retry_after_minutes": minutes_left,
+                    "upgrade": "https://github.com/teodorofodocrispin-cmyk/TrustBoost-PII-Sanitizer#trial"
+                }
+            )
 
     # ── Modo TRIAL ─────────────────────────────────────────
     if req.tx_hash.upper() == "TRIAL":
