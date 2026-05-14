@@ -65,6 +65,9 @@ app = FastAPI(title="TrustBoost PII Sanitizer v2.2")
 from demo_router import router as demo_router
 app.include_router(demo_router)
 
+from mcp_router import router as mcp_router
+app.include_router(mcp_router)
+
 SUPABASE_HEADERS = {
     "apikey": SUPABASE_KEY,
     "Authorization": f"Bearer {SUPABASE_KEY}",
