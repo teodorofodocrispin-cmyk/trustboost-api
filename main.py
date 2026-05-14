@@ -68,6 +68,17 @@ app.include_router(demo_router)
 from mcp_router import router as mcp_router
 app.include_router(mcp_router)
 
+@app.get("/.well-known/mcp-server-card.json")
+async def mcp_server_card():
+    return {
+        "schema_version": "v1",
+        "name": "TrustBoost PII Sanitizer",
+        "description": "Sanitize PII from text before it reaches LLMs.",
+        "url": "https://api.trustboost.dev/mcp",
+        "tools": ["sanitize_pii"],
+        "auth": {"type": "none"}
+    }
+
 SUPABASE_HEADERS = {
     "apikey": SUPABASE_KEY,
     "Authorization": f"Bearer {SUPABASE_KEY}",
