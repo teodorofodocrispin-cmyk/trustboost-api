@@ -32,6 +32,38 @@ Ready for more? See [Trial mode](#trial) below — 50 free sanitizations with a 
 
 ---
 
+## MCP Server — Claude, Cursor & Windsurf native integration
+
+TrustBoost is available as an MCP (Model Context Protocol) server.
+Add it to any MCP-compatible agent in one line:
+
+```json
+{
+  "mcpServers": {
+    "trustboost": {
+      "url": "https://api.trustboost.dev/mcp"
+    }
+  }
+}
+```
+
+Once connected, your agent can call `sanitize_pii` automatically
+before sending any text to an LLM:
+
+```bash
+# Manifest
+curl https://api.trustboost.dev/mcp
+
+# Execute
+curl -X POST https://api.trustboost.dev/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"tool": "sanitize_pii", "input": {"text": "My email is john@gmail.com"}}'
+```
+
+Compatible with: Claude Code · Cursor · Windsurf · Any MCP-compatible agent
+
+---
+
 ## Quick start
 
 ```bash
