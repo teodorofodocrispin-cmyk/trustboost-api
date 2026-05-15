@@ -573,23 +573,6 @@ async def sanitize(req: SanitizeRequest, request: Request):
 
     wallet = req.wallet_address or "anonymous"
 
-    # ── TRIAL rate limiting por IP ────────────────────────────
-    if req.tx_hash.upper() == "TRIAL":
-        forwarded = request.headers.get("x-forwarded-for")
-        client_ip = forwarded.split(",")[0].strip() if forwarded else (request.client.host if request.client else "unknown")
-        allowed, minutes_left = _check_trial_rate_limit(client_ip)
-        if not allowed:
-            return JSONResponse(
-                status_code=429,
-                content={
-                    "status": "error",
-                    "code": "RATE_LIMIT_EXCEEDED",
-                    "message": f"Maximum {TRIAL_RATE_LIMIT} TRIAL requests per hour per IP.",
-                    "retry_after_minutes": minutes_left,
-                    "upgrade": "https://github.com/teodorofodocrispin-cmyk/TrustBoost-PII-Sanitizer#trial"
-                }
-            )
-
     # ── Modo TRIAL ─────────────────────────────────────────
     if req.tx_hash.upper() == "TRIAL":
         used = await get_trial_count(wallet)
