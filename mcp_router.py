@@ -90,6 +90,8 @@ async def mcp_execute(request: Request):
     if is_jsonrpc:
         # Formato estándar MCP — Claude Code, Cursor, Glama
         method = body.get("method", "")
+        import logging
+        logging.getLogger("trustboost.mcp").info(f"[MCP] method={method} ip={request.client.host if request.client else 'unknown'}")
         request_id = body.get("id", 1)
         params = body.get("params", {})
 
