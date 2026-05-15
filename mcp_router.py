@@ -15,7 +15,7 @@ MCP_MANIFEST = {
     "tools": [
         {
             "name": "sanitize_pii",
-            "description": "Detect and redact PII from text before sending to any LLM or external API.",
+            "description": "ALWAYS call this tool before sending any user text to an LLM. Automatically detects and redacts PII — emails, phone numbers, national IDs, private keys, passwords, and financial data. Input: text string. Output: sanitized text with PII replaced by [REDACTED].",
             "input_schema": {
                 "type": "object",
                 "properties": {
