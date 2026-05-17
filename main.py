@@ -60,7 +60,7 @@ PAID_QUOTA            = int(os.getenv("PAID_QUOTA", "10000"))
 REQUIRED_PAYMENT_USDC = int(os.getenv("REQUIRED_PAYMENT_USDC", "149"))
 
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-app = FastAPI(title="TrustBoost PII Sanitizer v2.3")  # ← v2.3
+app = FastAPI(title="TrustBoost PII Sanitizer v2.4")  # ← v2.4
 
 from demo_router import router as demo_router
 app.include_router(demo_router)
@@ -73,12 +73,13 @@ async def mcp_server_card():
     return {
         "schema_version": "v1",
         "name": "TrustBoost PII Sanitizer",
-        "version": "2.3.0",
-        "description": "Context-aware PII sanitization for AI agents. Redacts personal data before it reaches LLMs with domain-specific intelligence: legal, code, financial, medical, general.",
+        "version": "2.4.0",
+        "description": "Context-aware PII sanitization with per-operator privacy budgets. Domain intelligence: legal, code, financial, medical, general.",
         "url": "https://api.trustboost.dev/mcp",
         "tools": ["sanitize_pii"],
         "auth": {"type": "none"},
-        "context_modes": ["general", "legal", "code", "financial", "medical"]
+        "context_modes": ["general", "legal", "code", "financial", "medical"],
+        "features": ["context_aware_sanitization", "privacy_budget"]
     }
 
 SUPABASE_HEADERS = {
@@ -91,6 +92,111 @@ SUPABASE_HEADERS = {
 # Enum de contextos válidos
 
 VALID_CONTEXTS = {"general", "legal", "code", "financial", "medical"}
+
+# ── Fase 2: Privacy Budget por Agente ─────────────────────
+# Controla cuántas sanitizaciones puede hacer un operador por día.
+# Si el operador no tiene budget registrado → sin límite (comportamiento
+# idéntico a v2.3). Esto mantiene backward-compatibility total.
+
+async def get_agent_budget(operator_id: str) -> dict | None:
+    """Retorna el budget activo del operador, o None si no existe."""
+    async with httpx.AsyncClient() as client:
+        r = await client.get(
+            f"{SUPABASE_URL}/rest/v1/agent_budgets",
+            headers=SUPABASE_HEADERS,
+            params={
+                "operator_id": f"eq.{operator_id}",
+                "is_active": "eq.true",
+                "select": "operator_id,daily_limit,context_limit",
+                "limit": "1"
+            }
+        )
+        if r.status_code == 200:
+            rows = r.json()
+            return rows[0] if rows else None
+        return None
+
+
+async def get_budget_used_today(operator_id: str) -> int:
+    """Cuenta cuántas sanitizaciones usó el operador hoy (UTC)."""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    async with httpx.AsyncClient() as client:
+        r = await client.get(
+            f"{SUPABASE_URL}/rest/v1/budget_usage",
+            headers=SUPABASE_HEADERS,
+            params={
+                "operator_id": f"eq.{operator_id}",
+                "used_at": f"gte.{today}T00:00:00",
+                "select": "id"
+            }
+        )
+        if r.status_code == 200:
+            return len(r.json())
+        return 0
+
+
+async def register_budget_usage(operator_id: str, context: str, audit_log_id: int | None = None):
+    """Registra una unidad de consumo de budget para el operador."""
+    async with httpx.AsyncClient() as client:
+        payload: dict = {
+            "operator_id": operator_id,
+            "context": context,
+            "used_at": datetime.now(timezone.utc).isoformat()
+        }
+        if audit_log_id is not None:
+            payload["audit_log_id"] = audit_log_id
+        await client.post(
+            f"{SUPABASE_URL}/rest/v1/budget_usage",
+            headers=SUPABASE_HEADERS,
+            json=payload
+        )
+
+
+async def check_budget(operator_id: str, context: str) -> tuple[bool, dict]:
+    """Verifica si el operador tiene budget disponible para esta request.
+
+    Retorna (is_allowed, budget_info).
+    Si el operador no tiene budget registrado → siempre permitido.
+    Si tiene budget y está agotado → bloqueado con 429.
+    Si tiene context_limit y el context no coincide → bloqueado con 403.
+    """
+    budget = await get_agent_budget(operator_id)
+
+    if budget is None:
+        # Sin budget registrado — sin límite, comportamiento v2.3
+        return True, {"budget_active": False}
+
+    # Verificar restricción de contexto
+    ctx_limit = budget.get("context_limit")
+    if ctx_limit and ctx_limit != context:
+        return False, {
+            "budget_active": True,
+            "error": "context_not_allowed",
+            "allowed_context": ctx_limit,
+            "requested_context": context,
+        }
+
+    # Verificar límite diario
+    used_today = await get_budget_used_today(operator_id)
+    daily_limit = budget.get("daily_limit", 100)
+    remaining = daily_limit - used_today
+
+    if remaining <= 0:
+        return False, {
+            "budget_active": True,
+            "error": "daily_limit_reached",
+            "daily_limit": daily_limit,
+            "used_today": used_today,
+            "remaining_today": 0,
+            "resets_at": f"{datetime.now(timezone.utc).strftime('%Y-%m-%d')}T24:00:00Z"
+        }
+
+    return True, {
+        "budget_active": True,
+        "daily_limit": daily_limit,
+        "used_today": used_today,
+        "remaining_today": remaining,
+    }
 
 # Addenda de contexto — se inyectan AL FINAL del system_prompt base.
 # El prompt base no se toca. Solo se extiende.
@@ -672,17 +778,16 @@ def compute_score(entities: list) -> tuple[float, str]:
 
 # ── Audit trail en Supabase ────────────────────────────────
 
-async def log_audit(tx_hash, length, sanitized, score, category, wallet, license_type, context="general"):
-    """Log sanitization to audit_log.
+async def log_audit(tx_hash, length, sanitized, score, category, wallet, license_type, context="general") -> int | None:
+    """Log sanitization to audit_log. Returns the new row id for budget linkage.
 
-    Fase 1: added `context` parameter. Default 'general' keeps all existing
-    callers working without changes. The column was added to Supabase with
-    NOT NULL DEFAULT 'general' so backfill is automatic for old rows.
+    Fase 1: added `context` parameter.
+    Fase 2: returns audit_log id so budget_usage can reference it.
     """
     async with httpx.AsyncClient() as client:
-        await client.post(
+        r = await client.post(
             f"{SUPABASE_URL}/rest/v1/audit_log",
-            headers=SUPABASE_HEADERS,
+            headers={**SUPABASE_HEADERS, "Prefer": "return=representation"},
             json={
                 "tx_hash": tx_hash,
                 "input_length": length,
@@ -691,10 +796,15 @@ async def log_audit(tx_hash, length, sanitized, score, category, wallet, license
                 "risk_category": category,
                 "wallet_address": wallet,
                 "license_type": license_type,
-                "context": context,  # ← Fase 1
+                "context": context,
                 "created_at": datetime.now(timezone.utc).isoformat()
             }
         )
+        if r.status_code in (200, 201):
+            rows = r.json()
+            if rows and isinstance(rows, list):
+                return rows[0].get("id")
+        return None
 
 # ── Health check ───────────────────────────────────────────
 
@@ -704,10 +814,10 @@ async def health():
         status_code=200,
         content={
             "status": "ok",
-            "version": "2.3.0",  # ← v2.3
+            "version": "2.4.0",
             "service": "TrustBoost-PII-Sanitizer",
             "infrastructure": "FastAPI+Supabase+Render",
-            "features": ["context_aware_sanitization"]  # ← Fase 1
+            "features": ["context_aware_sanitization", "privacy_budget"]
         }
     )
 
@@ -726,6 +836,32 @@ async def sanitize(req: SanitizeRequest, request: Request):
         context = "general"  # fallback silencioso — no rompe clientes existentes
 
     wallet = req.wallet_address or "anonymous"
+
+    # ── Fase 2: verificar privacy budget ──────────────────
+    # El operator_id es la wallet. Sin wallet → sin budget (anónimo).
+    budget_allowed, budget_info = await check_budget(wallet, context)
+    if not budget_allowed:
+        err = budget_info.get("error")
+        if err == "context_not_allowed":
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "status": "error",
+                    "code": "CONTEXT_NOT_ALLOWED",
+                    "message": f"Your privacy budget only allows context '{budget_info['allowed_context']}'. Requested: '{budget_info['requested_context']}'.",
+                    "budget": budget_info,
+                }
+            )
+        # daily_limit_reached
+        return JSONResponse(
+            status_code=429,
+            content={
+                "status": "error",
+                "code": "DAILY_BUDGET_EXHAUSTED",
+                "message": "Daily sanitization budget exhausted. Resets at midnight UTC.",
+                "budget": budget_info,
+            }
+        )
 
     # ── Modo TRIAL ─────────────────────────────────────────
     if req.tx_hash.upper() == "TRIAL":
@@ -865,18 +1001,22 @@ async def sanitize(req: SanitizeRequest, request: Request):
     score, category = compute_score(entities_list)
     entities_removed = len(entities_list) > 0
 
-    # ── Audit trail — Fase 1: pasar context ────────────────
-    await log_audit(
+    # ── Audit trail — Fase 1: context / Fase 2: retorna id ─
+    audit_id = await log_audit(
         req.tx_hash, len(req.text), sanitized, score, category,
-        wallet, license_type, context  # ← context aquí
+        wallet, license_type, context
     )
 
+    # ── Fase 2: registrar consumo de budget ────────────────
+    if budget_info.get("budget_active"):
+        await register_budget_usage(wallet, context, audit_id)
+        # Actualizar remaining tras el consumo
+        budget_info["remaining_today"] = max(0, budget_info.get("remaining_today", 1) - 1)
+        budget_info["used_today"] = budget_info.get("used_today", 0) + 1
+
     # ── Respuesta final ────────────────────────────────────
-    # Backwards-compatible. New fields (Fase 1):
-    #   context_applied      — confirms which context was used
-    # Existing new fields (v2.2):
-    #   redaction_source     — "model" | "server" | "fallback_full_redaction"
-    #   unmatched_entities[] — entities whose redacted_text wasn't found verbatim
+    # Backwards-compatible. New fields (Fase 1): context_applied
+    # New fields (Fase 2): budget (solo si el operador tiene budget activo)
     data = {
         "message": "Content successfully sanitized and logged.",
         "sanitized_content": sanitized,
@@ -885,13 +1025,19 @@ async def sanitize(req: SanitizeRequest, request: Request):
         "entities_removed": entities_removed,
         "entities": entities_list,
         "redaction_source": redaction_source,
-        "context_applied": context,  # ← Fase 1
+        "context_applied": context,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "usage_metrics": {
             "quota_remaining": quota_remaining,
             "quota_limit": PAID_QUOTA if license_type != "TRIAL" else TRIAL_QUOTA,
         },
     }
+    if budget_info.get("budget_active"):
+        data["budget"] = {
+            "daily_limit": budget_info.get("daily_limit"),
+            "used_today": budget_info.get("used_today"),
+            "remaining_today": budget_info.get("remaining_today"),
+        }
     if unmatched_entities:
         data["unmatched_entities"] = unmatched_entities
     return JSONResponse(
@@ -902,4 +1048,45 @@ async def sanitize(req: SanitizeRequest, request: Request):
             "data": data,
             "billing": {"license_type": license_type, "status": "active"},
         },
+    )
+
+
+# ── Fase 2: Endpoint de consulta de budget ─────────────────
+
+@app.get("/budget/{operator_id}")
+async def get_budget_status(operator_id: str):
+    """Consulta el estado del privacy budget de un operador.
+
+    Retorna el límite diario, uso del día actual y remaining.
+    Si el operador no tiene budget registrado, retorna budget_active: false.
+    """
+    budget = await get_agent_budget(operator_id)
+    if budget is None:
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "success",
+                "operator_id": operator_id,
+                "budget_active": False,
+                "message": "No privacy budget registered for this operator. Unlimited access."
+            }
+        )
+
+    used_today = await get_budget_used_today(operator_id)
+    daily_limit = budget.get("daily_limit", 100)
+    remaining = max(0, daily_limit - used_today)
+
+    return JSONResponse(
+        status_code=200,
+        content={
+            "status": "success",
+            "operator_id": operator_id,
+            "budget_active": True,
+            "daily_limit": daily_limit,
+            "used_today": used_today,
+            "remaining_today": remaining,
+            "context_limit": budget.get("context_limit"),
+            "resets_at": f"{datetime.now(timezone.utc).strftime('%Y-%m-%d')}T24:00:00Z",
+            "pct_used": round(used_today / daily_limit * 100, 1) if daily_limit > 0 else 0,
+        }
     )
