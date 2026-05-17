@@ -60,7 +60,7 @@ PAID_QUOTA            = int(os.getenv("PAID_QUOTA", "10000"))
 REQUIRED_PAYMENT_USDC = int(os.getenv("REQUIRED_PAYMENT_USDC", "149"))
 
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-app = FastAPI(title="TrustBoost PII Sanitizer v2.2")
+app = FastAPI(title="TrustBoost PII Sanitizer v2.3")  # ← v2.3
 
 from demo_router import router as demo_router
 app.include_router(demo_router)
@@ -73,10 +73,12 @@ async def mcp_server_card():
     return {
         "schema_version": "v1",
         "name": "TrustBoost PII Sanitizer",
-        "description": "Sanitize PII from text before it reaches LLMs.",
+        "version": "2.3.0",
+        "description": "Context-aware PII sanitization for AI agents. Redacts personal data before it reaches LLMs with domain-specific intelligence: legal, code, financial, medical, general.",
         "url": "https://api.trustboost.dev/mcp",
         "tools": ["sanitize_pii"],
-        "auth": {"type": "none"}
+        "auth": {"type": "none"},
+        "context_modes": ["general", "legal", "code", "financial", "medical"]
     }
 
 SUPABASE_HEADERS = {
@@ -85,118 +87,133 @@ SUPABASE_HEADERS = {
     "Content-Type": "application/json"
 }
 
-class SanitizeRequest(BaseModel):
-    text: str
-    tx_hash: str
-    wallet_address: Optional[str] = None
+# ── Fase 1: Context-Aware Sanitization ────────────────────
+# Enum de contextos válidos
+
+VALID_CONTEXTS = {"general", "legal", "code", "financial", "medical"}
+
+# Addenda de contexto — se inyectan AL FINAL del system_prompt base.
+# El prompt base no se toca. Solo se extiende.
+CONTEXT_ADDENDA: dict[str, str] = {
+    "general": "",  # Sin addendum — comportamiento idéntico al original
+
+    "legal": """
+## CONTEXT OVERRIDE: LEGAL
+Domain: Legal documents, contracts, court filings, regulatory submissions.
+
+PRESERVE — do NOT redact these even if they match a PII pattern:
+- Legal citations: case numbers, article/section references (e.g. "Art. 1502 CCF", "Case 2023-CV-0041")
+- Statute and regulation names
+- Generic role references: "the plaintiff", "the defendant", "the notary", "the undersigned"
+- Jurisdiction names and court names
+- Dates framed as legal milestones or procedural steps
+
+REDACT in addition to all standard rules:
+- Natural person names when they are parties, witnesses, or attorneys (not public figures in their public role)
+- National IDs of individuals in this document (RFC, CURP, DNI, SSN, CPF, NIT, RUT, CUIT…)
+- Personal home and work addresses of individuals
+- Personal phone numbers and personal email addresses
+- Signature lines and handwritten identifier references
+
+ESCALATION: Presence of a national ID in a legal document → always CRITICAL.
+""",
+
+    "code": """
+## CONTEXT OVERRIDE: CODE
+Domain: Source code, configuration files, CI/CD scripts, API documentation, READMEs with code.
+
+PRESERVE — do NOT redact these even if they match a PII pattern:
+- Variable names, function names, class names, method names, parameter names
+- File paths and directory structures (e.g. /home/user/project, ./config/settings.py)
+- Package names and import/require statements
+- Generic placeholder values: "your-api-key", "<TOKEN>", "<YOUR_SECRET>", "example.com", "localhost", "0.0.0.0", "INSERT_HERE"
+- Code comments that do NOT contain real, functional credentials
+- Semantic version strings (e.g. "v2.2.1", "2.3.0", "^1.0.0")
+- HTTP methods, status codes, JSON/YAML keys
+- Environment variable NAMES without their values (e.g. os.environ["SECRET_KEY"] — redact the VALUE if hardcoded, not the key name)
+
+REDACT in addition to all standard rules:
+- Real API keys and tokens hardcoded as string literals (patterns: sk-, pk-, ghp_, gho_, AKIA, AIza, xoxb-, hf_, sk_live_, etc.)
+- Hardcoded passwords in connection strings or config values
+- Non-RFC1918 real IP addresses embedded as string literals
+- Real email addresses embedded as string literals (not placeholder examples)
+- PEM blocks (-----BEGIN * KEY-----), seed phrases, hex private keys
+- JWT tokens with real payloads (three base64 segments separated by dots)
+- Database URLs with embedded credentials: postgres://user:realpass@host or mongodb+srv://user:realpass@host
+
+ESCALATION: Any real functional secret in code → CRITICAL regardless of other content.
+""",
+
+    "financial": """
+## CONTEXT OVERRIDE: FINANCIAL
+Domain: Bank statements, invoices, payment records, tax documents, trading logs, crypto transaction history.
+
+PRESERVE — do NOT redact these even if they match a PII pattern:
+- Monetary amounts and currencies (e.g. "$1,500.00 MXN", "149 USDC", "€200.00", "¥50,000")
+- Transaction dates and timestamps
+- General transaction category labels (e.g. "groceries", "salary", "wire transfer fee", "tax payment")
+- Merchant category codes (MCC) and generic merchant type labels
+- Publicly known exchange rates and tax percentages (e.g. "16% IVA", "10% withholding", "21% VAT")
+- Institution names used purely as category or payee labels (e.g. "Netflix", "CFE", "SAT")
+
+REDACT in addition to all standard rules:
+- Full account numbers and IBANs
+- Card numbers showing more than the last 4 digits
+- Routing numbers and SWIFT/BIC codes
+- Individual transaction reference IDs that, combined with other data, could identify a person
+- Tax IDs linked to individuals (RFC, CPF, CUIT, SSN, EIN, NIT…)
+- Account holder full names
+- Statement delivery addresses
+- Crypto wallet public addresses (Solana, Ethereum, Bitcoin, and other chains)
+- Internal transfer memo fields containing personal data
+
+ESCALATION: Full card number or full account number → always CRITICAL.
+""",
+
+    "medical": """
+## CONTEXT OVERRIDE: MEDICAL
+Domain: Clinical notes, lab results, prescriptions, discharge summaries, insurance forms, patient records.
+Privacy standard: Apply HIPAA minimum-necessary principle + LGPD Art. 11 (health data as sensitive category).
+
+PRESERVE — do NOT redact these even if they match a PII pattern:
+- Diagnoses, conditions, and ICD-10/CIE-10 codes
+- Medication names, dosages, and administration routes (e.g. "Metformin 500mg twice daily", "Amoxicillin 875mg PO BID")
+- Lab test names and reference ranges (e.g. "HbA1c: 7.2% [ref: <5.7%]")
+- Generic anatomical terms and clinical/pharmacological terminology
+- Relative clinical dates that do NOT enable re-identification ("Day 3 post-op", "Follow-up at 6 weeks", "onset 2 weeks ago")
+- Hospital and clinic names used institutionally — NOT linked to a specific named patient in the same sentence
+
+REDACT in addition to all standard rules:
+- Patient full names and nicknames
+- Patient dates of birth and exact ages when combined with other identifiers (re-identification risk)
+- Patient national IDs of any country (SSN, RFC, CPF, DNI, RUT, NIF…)
+- Patient home addresses and personal phone numbers
+- Physician names (treat as PRIVATE)
+- Insurance policy numbers and member/beneficiary IDs
+- Medical record numbers (MRN) and encounter IDs
+- Next-of-kin names and contact information
+
+ESCALATION: Co-occurrence of diagnosis + patient name + date of birth in the same input → CRITICAL (re-identification risk under HIPAA Safe Harbor).
+""",
+}
 
 
-class Entity(BaseModel):
-    """A single PII entity detected in the input.
+def _build_system_prompt(context: str) -> str:
+    """Returns the full system prompt for gpt-4o-mini.
 
-    `type` is a short machine-friendly label (e.g. "email", "aws_access_key",
-    "jp_my_number", "jp_full_name"). `category` is the risk tier used for
-    scoring. `redacted_text` is the original substring that was replaced with
-    [REDACTED]; it is returned so callers can audit *what* was removed without
-    having to diff input vs output. Callers that don't need it can ignore it.
+    Strategy: keep the original prompt 100% intact (it is battle-tested and
+    production-grade). Append the context addendum at the end so the model
+    reads domain rules AFTER the universal rules — consistent with how GPT
+    processes long system prompts (recency bias toward the end).
+    The general context has an empty addendum, making the call identical to
+    the original v2.2 behavior.
     """
-    type: str
-    category: Literal["CRITICAL", "PRIVATE", "SENSITIVE"]
-    redacted_text: str
+    addendum = CONTEXT_ADDENDA.get(context, "")
+    return SYSTEM_PROMPT_BASE + addendum
 
-# ── TRIAL: contador por wallet ──────────────────────────────
 
-async def get_trial_count(wallet: str) -> int:
-    async with httpx.AsyncClient() as client:
-        r = await client.get(
-            f"{SUPABASE_URL}/rest/v1/trial_requests",
-            headers=SUPABASE_HEADERS,
-            params={"wallet_address": f"eq.{wallet}", "select": "id"}
-        )
-        if r.status_code == 200:
-            return len(r.json())
-        return 0
-
-async def increment_trial(wallet: str):
-    async with httpx.AsyncClient() as client:
-        await client.post(
-            f"{SUPABASE_URL}/rest/v1/trial_requests",
-            headers=SUPABASE_HEADERS,
-            json={"wallet_address": wallet}
-        )
-
-# ── PAID: verificar y contar por tx_hash ───────────────────
-
-async def check_replay(tx_hash: str) -> bool:
-    """Verifica si el tx_hash existe en used_tx — primer uso."""
-    async with httpx.AsyncClient() as client:
-        r = await client.get(
-            f"{SUPABASE_URL}/rest/v1/used_tx",
-            headers=SUPABASE_HEADERS,
-            params={"tx_hash": f"eq.{tx_hash}", "select": "tx_hash"}
-        )
-        if r.status_code == 200 and len(r.json()) > 0:
-            return True  # Ya existe — no es replay, es reutilización válida
-        return False  # No existe — primer uso
-
-async def register_tx_hash(tx_hash: str):
-    """Registra el tx_hash en used_tx la primera vez."""
-    async with httpx.AsyncClient() as client:
-        await client.post(
-            f"{SUPABASE_URL}/rest/v1/used_tx",
-            headers={**SUPABASE_HEADERS, "Prefer": "return=minimal"},
-            json={"tx_hash": tx_hash}
-        )
-
-async def get_paid_count(tx_hash: str) -> int:
-    """Cuenta cuántas sanitizaciones se han usado de este tx_hash."""
-    async with httpx.AsyncClient() as client:
-        r = await client.get(
-            f"{SUPABASE_URL}/rest/v1/paid_requests",
-            headers=SUPABASE_HEADERS,
-            params={"tx_hash": f"eq.{tx_hash}", "select": "id"}
-        )
-        if r.status_code == 200:
-            return len(r.json())
-        return 0
-
-async def increment_paid(tx_hash: str):
-    """Registra una sanitización usada contra este tx_hash."""
-    async with httpx.AsyncClient() as client:
-        await client.post(
-            f"{SUPABASE_URL}/rest/v1/paid_requests",
-            headers=SUPABASE_HEADERS,
-            json={"tx_hash": tx_hash}
-        )
-
-# ── HELIUS: verificar pago en Solana ───────────────────────
-
-async def helius_verify(tx_hash: str) -> tuple[bool, float]:
-    url = f"https://api.helius.xyz/v0/addresses/{PAYMENT_WALLET}/transactions"
-    async with httpx.AsyncClient() as client:
-        for _ in range(3):
-            try:
-                r = await client.post(
-                    url,
-                    params={"api-key": HELIUS_API_KEY},
-                    json={"transactions": [tx_hash]},
-                    timeout=15
-                )
-                if r.status_code == 200:
-                    data = r.json()
-                    if data:
-                        for t in data[0].get("tokenTransfers", []):
-                            if t.get("tokenAmount", 0) >= REQUIRED_PAYMENT_USDC:
-                                return True, t["tokenAmount"]
-                return False, 0
-            except Exception:
-                continue
-    return False, 0
-
-# ── GPT-4o-mini: sanitización multilingüe ──────────────────
-
-async def gpt_sanitize(text: str) -> dict:
-    system_prompt = """You are TrustBoost AI Sanitizer — a precision PII redaction engine for autonomous AI agent pipelines. Your sole function is to detect and neutralize Personally Identifiable Information before it reaches LLM providers.
+# ── Original system prompt — UNMODIFIED from v2.2 ─────────
+SYSTEM_PROMPT_BASE = """You are TrustBoost AI Sanitizer — a precision PII redaction engine for autonomous AI agent pipelines. Your sole function is to detect and neutralize Personally Identifiable Information before it reaches LLM providers.
 
 ## CORE DIRECTIVE
 Scan the input text, replace ALL detected PII with the literal tag [REDACTED], and return a structured JSON assessment listing every entity you redacted. Preserve the original language, tone, structure, and non-PII content exactly.
@@ -371,6 +388,130 @@ Empty input schema:
 - Never hallucinate PII that wasn't in the original text
 - Never modify non-PII content
 - Temperature is 0 — deterministic redaction only"""
+
+
+class SanitizeRequest(BaseModel):
+    text: str
+    tx_hash: str
+    wallet_address: Optional[str] = None
+    context: str = "general"  # ← Fase 1: opcional, default general, 100% backward-compatible
+
+
+class Entity(BaseModel):
+    """A single PII entity detected in the input.
+
+    `type` is a short machine-friendly label (e.g. "email", "aws_access_key",
+    "jp_my_number", "jp_full_name"). `category` is the risk tier used for
+    scoring. `redacted_text` is the original substring that was replaced with
+    [REDACTED]; it is returned so callers can audit *what* was removed without
+    having to diff input vs output. Callers that don't need it can ignore it.
+    """
+    type: str
+    category: Literal["CRITICAL", "PRIVATE", "SENSITIVE"]
+    redacted_text: str
+
+# ── TRIAL: contador por wallet ──────────────────────────────
+
+async def get_trial_count(wallet: str) -> int:
+    async with httpx.AsyncClient() as client:
+        r = await client.get(
+            f"{SUPABASE_URL}/rest/v1/trial_requests",
+            headers=SUPABASE_HEADERS,
+            params={"wallet_address": f"eq.{wallet}", "select": "id"}
+        )
+        if r.status_code == 200:
+            return len(r.json())
+        return 0
+
+async def increment_trial(wallet: str):
+    async with httpx.AsyncClient() as client:
+        await client.post(
+            f"{SUPABASE_URL}/rest/v1/trial_requests",
+            headers=SUPABASE_HEADERS,
+            json={"wallet_address": wallet}
+        )
+
+# ── PAID: verificar y contar por tx_hash ───────────────────
+
+async def check_replay(tx_hash: str) -> bool:
+    """Verifica si el tx_hash existe en used_tx — primer uso."""
+    async with httpx.AsyncClient() as client:
+        r = await client.get(
+            f"{SUPABASE_URL}/rest/v1/used_tx",
+            headers=SUPABASE_HEADERS,
+            params={"tx_hash": f"eq.{tx_hash}", "select": "tx_hash"}
+        )
+        if r.status_code == 200 and len(r.json()) > 0:
+            return True  # Ya existe — no es replay, es reutilización válida
+        return False  # No existe — primer uso
+
+async def register_tx_hash(tx_hash: str):
+    """Registra el tx_hash en used_tx la primera vez."""
+    async with httpx.AsyncClient() as client:
+        await client.post(
+            f"{SUPABASE_URL}/rest/v1/used_tx",
+            headers={**SUPABASE_HEADERS, "Prefer": "return=minimal"},
+            json={"tx_hash": tx_hash}
+        )
+
+async def get_paid_count(tx_hash: str) -> int:
+    """Cuenta cuántas sanitizaciones se han usado de este tx_hash."""
+    async with httpx.AsyncClient() as client:
+        r = await client.get(
+            f"{SUPABASE_URL}/rest/v1/paid_requests",
+            headers=SUPABASE_HEADERS,
+            params={"tx_hash": f"eq.{tx_hash}", "select": "id"}
+        )
+        if r.status_code == 200:
+            return len(r.json())
+        return 0
+
+async def increment_paid(tx_hash: str):
+    """Registra una sanitización usada contra este tx_hash."""
+    async with httpx.AsyncClient() as client:
+        await client.post(
+            f"{SUPABASE_URL}/rest/v1/paid_requests",
+            headers=SUPABASE_HEADERS,
+            json={"tx_hash": tx_hash}
+        )
+
+# ── HELIUS: verificar pago en Solana ───────────────────────
+
+async def helius_verify(tx_hash: str) -> tuple[bool, float]:
+    url = f"https://api.helius.xyz/v0/addresses/{PAYMENT_WALLET}/transactions"
+    async with httpx.AsyncClient() as client:
+        for _ in range(3):
+            try:
+                r = await client.post(
+                    url,
+                    params={"api-key": HELIUS_API_KEY},
+                    json={"transactions": [tx_hash]},
+                    timeout=15
+                )
+                if r.status_code == 200:
+                    data = r.json()
+                    if data:
+                        for t in data[0].get("tokenTransfers", []):
+                            if t.get("tokenAmount", 0) >= REQUIRED_PAYMENT_USDC:
+                                return True, t["tokenAmount"]
+                return False, 0
+            except Exception:
+                continue
+    return False, 0
+
+# ── GPT-4o-mini: sanitización multilingüe + context-aware ──
+
+async def gpt_sanitize(text: str, context: str = "general") -> dict:
+    """Sanitize text using the context-specific system prompt.
+
+    Fase 1 change: accepts an optional `context` parameter that injects a
+    domain-specific addendum AFTER the base prompt. The base prompt is
+    100% unchanged from v2.2 — only the addendum is new. When context is
+    'general' (default), the addendum is empty and behavior is identical
+    to v2.2. All other logic (enforce_redaction, scoring, failsafe) is
+    unaffected.
+    """
+    system_prompt = _build_system_prompt(context)
     r = await openai_client.chat.completions.create(
         model="gpt-4o-mini",
         temperature=0,
@@ -531,7 +672,13 @@ def compute_score(entities: list) -> tuple[float, str]:
 
 # ── Audit trail en Supabase ────────────────────────────────
 
-async def log_audit(tx_hash, length, sanitized, score, category, wallet, license_type):
+async def log_audit(tx_hash, length, sanitized, score, category, wallet, license_type, context="general"):
+    """Log sanitization to audit_log.
+
+    Fase 1: added `context` parameter. Default 'general' keeps all existing
+    callers working without changes. The column was added to Supabase with
+    NOT NULL DEFAULT 'general' so backfill is automatic for old rows.
+    """
     async with httpx.AsyncClient() as client:
         await client.post(
             f"{SUPABASE_URL}/rest/v1/audit_log",
@@ -544,6 +691,7 @@ async def log_audit(tx_hash, length, sanitized, score, category, wallet, license
                 "risk_category": category,
                 "wallet_address": wallet,
                 "license_type": license_type,
+                "context": context,  # ← Fase 1
                 "created_at": datetime.now(timezone.utc).isoformat()
             }
         )
@@ -556,9 +704,10 @@ async def health():
         status_code=200,
         content={
             "status": "ok",
-            "version": "2.2.0",
+            "version": "2.3.0",  # ← v2.3
             "service": "TrustBoost-PII-Sanitizer",
-            "infrastructure": "FastAPI+Supabase+Render"
+            "infrastructure": "FastAPI+Supabase+Render",
+            "features": ["context_aware_sanitization"]  # ← Fase 1
         }
     )
 
@@ -570,6 +719,11 @@ async def sanitize(req: SanitizeRequest, request: Request):
     # Validación básica
     if not req.text or not req.text.strip():
         return JSONResponse(status_code=200, content={"status": "empty_input"})
+
+    # Fase 1: validar y normalizar context
+    context = req.context.lower().strip() if req.context else "general"
+    if context not in VALID_CONTEXTS:
+        context = "general"  # fallback silencioso — no rompe clientes existentes
 
     wallet = req.wallet_address or "anonymous"
 
@@ -664,8 +818,8 @@ async def sanitize(req: SanitizeRequest, request: Request):
         await increment_paid(req.tx_hash)
         license_type = "Enterprise - 149 USDC"
 
-    # ── Sanitización ───────────────────────────────────────
-    result = await gpt_sanitize(req.text)
+    # ── Sanitización — Fase 1: pasar context ───────────────
+    result = await gpt_sanitize(req.text, context)  # ← context aquí
     if result.get("status") == "empty_input":
         return JSONResponse(status_code=200, content={"status": "empty_input"})
 
@@ -711,14 +865,18 @@ async def sanitize(req: SanitizeRequest, request: Request):
     score, category = compute_score(entities_list)
     entities_removed = len(entities_list) > 0
 
-    # ── Audit trail ────────────────────────────────────────
-    await log_audit(req.tx_hash, len(req.text), sanitized, score, category, wallet, license_type)
+    # ── Audit trail — Fase 1: pasar context ────────────────
+    await log_audit(
+        req.tx_hash, len(req.text), sanitized, score, category,
+        wallet, license_type, context  # ← context aquí
+    )
 
     # ── Respuesta final ────────────────────────────────────
-    # Backwards-compatible. New fields:
+    # Backwards-compatible. New fields (Fase 1):
+    #   context_applied      — confirms which context was used
+    # Existing new fields (v2.2):
     #   redaction_source     — "model" | "server" | "fallback_full_redaction"
-    #   unmatched_entities[] — entities whose redacted_text wasn't found
-    #                          verbatim in the input (omitted when empty)
+    #   unmatched_entities[] — entities whose redacted_text wasn't found verbatim
     data = {
         "message": "Content successfully sanitized and logged.",
         "sanitized_content": sanitized,
@@ -727,6 +885,7 @@ async def sanitize(req: SanitizeRequest, request: Request):
         "entities_removed": entities_removed,
         "entities": entities_list,
         "redaction_source": redaction_source,
+        "context_applied": context,  # ← Fase 1
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "usage_metrics": {
             "quota_remaining": quota_remaining,
