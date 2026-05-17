@@ -60,7 +60,7 @@ PAID_QUOTA            = int(os.getenv("PAID_QUOTA", "10000"))
 REQUIRED_PAYMENT_USDC = int(os.getenv("REQUIRED_PAYMENT_USDC", "149"))
 
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-app = FastAPI(title="TrustBoost PII Sanitizer v2.4")  # ← v2.4
+app = FastAPI(title="TrustBoost PII Sanitizer v2.5")  # ← v2.5
 
 from demo_router import router as demo_router
 app.include_router(demo_router)
@@ -73,13 +73,13 @@ async def mcp_server_card():
     return {
         "schema_version": "v1",
         "name": "TrustBoost PII Sanitizer",
-        "version": "2.4.0",
-        "description": "Context-aware PII sanitization with per-operator privacy budgets. Domain intelligence: legal, code, financial, medical, general.",
+        "version": "2.5.0",
+        "description": "Context-aware PII sanitization with privacy budgets and agent trust scoring. Domain intelligence: legal, code, financial, medical, general.",
         "url": "https://api.trustboost.dev/mcp",
         "tools": ["sanitize_pii"],
         "auth": {"type": "none"},
         "context_modes": ["general", "legal", "code", "financial", "medical"],
-        "features": ["context_aware_sanitization", "privacy_budget"]
+        "features": ["context_aware_sanitization", "privacy_budget", "trustboost_score"]
     }
 
 SUPABASE_HEADERS = {
@@ -814,10 +814,10 @@ async def health():
         status_code=200,
         content={
             "status": "ok",
-            "version": "2.4.0",
+            "version": "2.5.0",
             "service": "TrustBoost-PII-Sanitizer",
             "infrastructure": "FastAPI+Supabase+Render",
-            "features": ["context_aware_sanitization", "privacy_budget"]
+            "features": ["context_aware_sanitization", "privacy_budget", "trustboost_score"]
         }
     )
 
@@ -1055,11 +1055,7 @@ async def sanitize(req: SanitizeRequest, request: Request):
 
 @app.get("/budget/{operator_id}")
 async def get_budget_status(operator_id: str):
-    """Consulta el estado del privacy budget de un operador.
-
-    Retorna el límite diario, uso del día actual y remaining.
-    Si el operador no tiene budget registrado, retorna budget_active: false.
-    """
+    """Consulta el estado del privacy budget de un operador."""
     budget = await get_agent_budget(operator_id)
     if budget is None:
         return JSONResponse(
@@ -1088,5 +1084,95 @@ async def get_budget_status(operator_id: str):
             "context_limit": budget.get("context_limit"),
             "resets_at": f"{datetime.now(timezone.utc).strftime('%Y-%m-%d')}T24:00:00Z",
             "pct_used": round(used_today / daily_limit * 100, 1) if daily_limit > 0 else 0,
+        }
+    )
+
+
+# ── Fase 3: TrustBoost Score ───────────────────────────────
+
+async def fetch_wallet_score(wallet: str) -> dict | None:
+    """Consulta la vista wallet_scores en Supabase para una wallet."""
+    async with httpx.AsyncClient() as client:
+        r = await client.get(
+            f"{SUPABASE_URL}/rest/v1/wallet_scores",
+            headers=SUPABASE_HEADERS,
+            params={
+                "wallet_address": f"eq.{wallet}",
+                "select": "*",
+                "limit": "1"
+            }
+        )
+        if r.status_code == 200:
+            rows = r.json()
+            return rows[0] if rows else None
+        return None
+
+
+@app.get("/score/{wallet}")
+async def get_trustboost_score(wallet: str):
+    """Retorna el TrustBoost Score de un operador basado en su historial.
+
+    El score (0.0 — 1.0) mide la confiabilidad del agente:
+    - Base: inverso del avg_safety_score (texto más limpio = score más alto)
+    - Penalización: proporción de requests CRITICAL
+    - Bonuses: volumen de historial, diversidad de contextos, antigüedad
+
+    Trust tiers:
+      TRUSTED  ≥ 0.80 — agente maduro, historial limpio
+      VERIFIED ≥ 0.60 — agente activo y confiable
+      ACTIVE   ≥ 0.40 — agente en uso, historial en construcción
+      NEW       < 0.40 — agente nuevo o sin historial suficiente
+    """
+    if not wallet or wallet == "anonymous":
+        return JSONResponse(
+            status_code=400,
+            content={
+                "status": "error",
+                "code": "INVALID_WALLET",
+                "message": "A valid wallet address is required to compute a TrustBoost Score."
+            }
+        )
+
+    row = await fetch_wallet_score(wallet)
+
+    if row is None:
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "success",
+                "wallet": wallet,
+                "trustboost_score": None,
+                "trust_tier": "NEW",
+                "message": "No sanitization history found for this wallet. Score will be available after first use.",
+                "history": {
+                    "total_requests": 0,
+                    "first_seen": None,
+                    "last_seen": None,
+                }
+            }
+        )
+
+    return JSONResponse(
+        status_code=200,
+        content={
+            "status": "success",
+            "wallet": wallet,
+            "trustboost_score": float(row["trustboost_score"]),
+            "trust_tier": row["trust_tier"],
+            "score_breakdown": {
+                "avg_safety_score":  float(row["avg_safety_score"]),
+                "critical_count":    row["critical_count"],
+                "private_count":     row["private_count"],
+                "sensitive_count":   row["sensitive_count"],
+                "clean_count":       row["clean_count"],
+                "contexts_used":     row["contexts_used"],
+                "days_active":       int(row["days_active"]) if row["days_active"] else 0,
+            },
+            "history": {
+                "total_requests": row["total_requests"],
+                "first_seen":     row["first_seen"],
+                "last_seen":      row["last_seen"],
+            },
+            "computed_at": datetime.now(timezone.utc).isoformat(),
         }
     )
