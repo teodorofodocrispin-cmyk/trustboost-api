@@ -394,6 +394,45 @@ Apply the country-specific patterns for the detected language.
 - Phone formats: +49 (DE), +43 (AT), +41 (CH)
 - German addresses: Straße, Platz, Weg + number + PLZ (5-digit postal)
 
+### FRENCH — FRANCE, BELGIUM, SWITZERLAND, CANADA
+- NIR (Numéro de Sécurité Sociale): [12][0-9]{2}(0[1-9]|1[0-2])[0-9]{5}[0-9]{3}[0-9]{2} — 15 digits, gender + birth month + department + sequence
+- SIRET: [0-9]{14} — 14-digit business identifier (last 5 = NIC)
+- SIREN: [0-9]{9} — 9-digit company identifier
+- Numéro fiscal (SPI): [0-9]{13} — tax reference number
+- Carte Vitale: [12][0-9]{12} — health insurance card, 13 digits
+- Numéro de passeport FR: [0-9]{2}[A-Z]{2}[0-9]{5} — French passport
+- Carte Nationale d'Identité: [0-9]{12} — 12-digit national ID
+- IBAN FR: FR[0-9]{2}[0-9]{10}[A-Z0-9]{11}[0-9]{2}
+- RIB: 23-character bank account (5 bank + 5 branch + 11 account + 2 key)
+- Phone formats: +33 (FR) X XX XX XX XX, +32 (BE), +41 (CH), +1-514/438/579 (CA-QC)
+- French addresses: numéro + rue/avenue/boulevard/place + code postal (5 digits) + ville
+- ESCALATION: NIR combined with name or address → always CRITICAL
+
+### ITALIAN — ITALY, SAN MARINO, VATICAN
+- Codice Fiscale: [A-Z]{6}[0-9]{2}[A-Z][0-9]{2}[A-Z][0-9]{3}[A-Z] — 16 alphanumeric, unique to each Italian citizen
+- Partita IVA: IT[0-9]{11} or [0-9]{11} — 11-digit business VAT number
+- Carta d'Identità (CIE): [A-Z]{2}[0-9]{7} — new electronic ID card
+- Tessera Sanitaria: [0-9]{20} — 20-digit health card number
+- Codice IBAN IT: IT[0-9]{2}[A-Z][0-9]{10}[0-9]{12}
+- Numero di Passaporto: [A-Z]{2}[0-9]{7} — Italian passport
+- Patente di Guida: [A-Z]{2}[0-9]{7}[A-Z] — driving license
+- Codice STP: STP[0-9]{11} — for foreign nationals in Italy
+- Phone formats: +39 (IT) — mobile 3XX XXXXXXX, landline 0X XXXXXXXX
+- Italian addresses: Via/Viale/Piazza/Corso + name + civico + CAP (5 digits) + città
+- ESCALATION: Codice Fiscale is always CRITICAL — it encodes birth date, place, and gender
+
+### KOREAN — REPUBLIC OF KOREA
+- 주민등록번호 (Resident Registration Number — RRN): [0-9]{6}-[0-9]{7} — 13 digits: birth date (YYMMDD) + gender + region + sequence + checksum
+- 사업자등록번호 (Business Registration Number): [0-9]{3}-[0-9]{2}-[0-9]{5} — 10-digit company ID
+- 여권번호 (Passport Number): [A-Z]{2}[0-9]{7} — Korean passport format
+- 운전면허번호 (Driver's License): [0-9]{2}-[0-9]{2}-[0-9]{6}-[0-9]{2} — regional format
+- 건강보험번호 (Health Insurance Number): [0-9]{12} — 12-digit NHI number
+- 외국인등록번호 (Alien Registration Number): [0-9]{6}-[5-8][0-9]{6} — for foreign residents
+- 계좌번호 (Bank Account): [0-9]{10,16} in banking context
+- Phone formats: +82 (KR) — mobile 010-XXXX-XXXX, landline 02-XXXX-XXXX (Seoul), 0XX-XXX-XXXX
+- Korean addresses: 도/시 + 구/군 + 동/읍/면 + 로/길 + building number (reverse order from Western)
+- ESCALATION: RRN is always CRITICAL — full RRN reveals birth date, gender, and region of registration. Even partial RRN (first 6 digits = birth date) → PRIVATE minimum.
+
 ### JAPANESE — JAPAN
 - マイナンバー (My Number): 12-digit individual number
 - 法人番号 (Corporate Number): 13-digit corporate number
