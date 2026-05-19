@@ -1308,7 +1308,7 @@ async def demo_sanitize(req: DemoRequest, request: Request):
         sanitized = result.get("cleaned_text", "[REDACTED]")
 
         # Server-side enforcement
-        sanitized, entities_list = enforce_redaction(text, sanitized, entities_list)
+        sanitized, _, entities_list = enforce_redaction(text, sanitized, entities_list)
         score, category = compute_score(entities_list)
 
         # Log the demo request
