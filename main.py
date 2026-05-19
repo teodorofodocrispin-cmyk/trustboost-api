@@ -1301,10 +1301,14 @@ async def demo_sanitize(req: DemoRequest, request: Request):
             content={"status": "error", "message": "Text cannot be empty"}
         )
 
-    # Call the LLM sanitizer
+    # Call the LLM sanitizer using the real gpt_sanitize function
     try:
-        entities_raw, sanitized = await call_llm_sanitizer(text, "general")
-        entities_list = parse_entities(entities_raw)
+        result = await gpt_sanitize(text, context="general")
+        entities_list = result.get("entities", [])
+        sanitized = result.get("cleaned_text", "[REDACTED]")
+
+        # Server-side enforcement
+        sanitized, entities_list = enforce_redaction(text, sanitized, entities_list)
         score, category = compute_score(entities_list)
 
         # Log the demo request
