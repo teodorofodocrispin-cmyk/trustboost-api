@@ -3,7 +3,7 @@
 A precision PII redaction layer for autonomous AI agent pipelines.
 Detects and redacts personally identifiable information **before** it reaches
 LLM providers, across English, Spanish (LATAM), Portuguese (BR/PT), German,
-and Japanese.
+Japanese, French, Italian, and Korean.
 
 - **Endpoint:** `https://api.trustboost.dev/sanitize`
 - **Stack:** FastAPI · OpenAI `gpt-4o-mini` (temperature 0) · Supabase · Solana payments via Helius
@@ -176,6 +176,9 @@ The system prompt covers, among others:
 - **Portuguese (BR/PT):** CPF, CNPJ, RG, NIF, NUS, CEP, country phones.
 - **German (DE/AT/CH):** Personalausweis, Steuer-IDs, Sozialversicherungsnummer, IBAN DE, addresses.
 - **Japanese:** マイナンバー, 法人番号, 運転免許証, パスポート, 健康保険証, 電話番号, 住所, and 氏名 (full names in kanji, mixed scripts, katakana, or hiragana).
+- **French (FR/BE/CH/CA):** NIR (Numéro de Sécurité Sociale), SIRET, SIREN, Carte Vitale, IBAN FR, Numéro fiscal, country phones +33/+32/+41.
+- **Italian (IT):** Codice Fiscale, Partita IVA, Carta d'Identità (CIE), Tessera Sanitaria, IBAN IT, Patente di Guida, country phone +39.
+- **Korean (KR):** 주민등록번호 (RRN), 사업자등록번호, 여권번호, 운전면허번호, 건강보험번호, 외국인등록번호, country phone +82.
 
 ## Running locally
 
