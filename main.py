@@ -74,7 +74,7 @@ async def mcp_server_card():
         "schema_version": "v1",
         "name": "TrustBoost PII Sanitizer",
         "version": "2.5.0",
-        "description": "Context-aware PII sanitization with privacy budgets and agent trust scoring. Domain intelligence: legal, code, financial, medical, general.",
+        "description": "Context-aware PII sanitization for AI agent pipelines. 8 languages: EN, ES (LATAM), PT (BR/PT), DE, JA, FR, IT, KO. Context modes: legal/financial/medical/code/general. Privacy Budget. TrustBoost Score M2M.",
         "url": "https://api.trustboost.dev/mcp",
         "tools": ["sanitize_pii"],
         "auth": {"type": "none"},
