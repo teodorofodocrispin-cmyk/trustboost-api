@@ -1215,3 +1215,136 @@ async def get_trustboost_score(wallet: str):
             "computed_at": datetime.now(timezone.utc).isoformat(),
         }
     )
+
+# ── DEMO: rate limiting autónomo por IP ────────────────────
+
+DEMO_LIMIT_PER_HOUR = 3
+DEMO_MAX_CHARS = 500
+
+async def get_demo_count(ip_hash: str) -> int:
+    async with httpx.AsyncClient() as client:
+        r = await client.get(
+            f"{SUPABASE_URL}/rest/v1/demo_requests",
+            headers=SUPABASE_HEADERS,
+            params={
+                "ip_hash": f"eq.{ip_hash}",
+                "created_at": f"gte.{(datetime.utcnow() - timedelta(hours=1)).isoformat()}",
+                "select": "id"
+            }
+        )
+        if r.status_code == 200:
+            return len(r.json())
+        return 0
+
+async def increment_demo(ip_hash: str):
+    async with httpx.AsyncClient() as client:
+        await client.post(
+            f"{SUPABASE_URL}/rest/v1/demo_requests",
+            headers=SUPABASE_HEADERS,
+            json={"ip_hash": ip_hash}
+        )
+
+class DemoRequest(BaseModel):
+    text: str
+
+@app.post("/demo")
+async def demo_sanitize(req: DemoRequest, request: Request):
+    """
+    Public demo endpoint for Hugging Face Space and live demos.
+    - 3 requests per IP per hour — autonomous rate limiting
+    - Max 500 characters per request
+    - Always includes upgrade CTA toward TRIAL and paid
+    - No wallet, no tx_hash required
+    - Anti-abuse: IP hash stored, never raw IP
+    """
+    import hashlib
+
+    # Hash the IP — never store raw IP
+    raw_ip = request.client.host if request.client else "unknown"
+    ip_hash = hashlib.sha256(raw_ip.encode()).hexdigest()[:16]
+
+    # Check rate limit
+    count = await get_demo_count(ip_hash)
+    remaining = max(0, DEMO_LIMIT_PER_HOUR - count)
+
+    if remaining == 0:
+        return JSONResponse(
+            status_code=429,
+            content={
+                "status": "demo_limit_reached",
+                "message": "Demo limit reached (3 requests/hour). Upgrade to TRIAL for 50 free sanitizations — no payment needed.",
+                "demo_limits": {
+                    "requests_per_hour": DEMO_LIMIT_PER_HOUR,
+                    "reset_in": "up to 60 minutes"
+                },
+                "upgrade": {
+                    "trial": {
+                        "description": "50 free sanitizations — no payment required",
+                        "how": "Use tx_hash=TRIAL with any wallet_address",
+                        "url": "https://github.com/teodorofodocrispin-cmyk/TrustBoost-PII-Sanitizer#trial"
+                    },
+                    "paid": {
+                        "description": "10,000 sanitizations — 149 USDC on Solana",
+                        "url": "https://github.com/teodorofodocrispin-cmyk/TrustBoost-PII-Sanitizer#pricing"
+                    }
+                }
+            }
+        )
+
+    # Truncate to max chars
+    text = req.text[:DEMO_MAX_CHARS]
+    truncated = len(req.text) > DEMO_MAX_CHARS
+
+    if not text.strip():
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "message": "Text cannot be empty"}
+        )
+
+    # Call the LLM sanitizer
+    try:
+        entities_raw, sanitized = await call_llm_sanitizer(text, "general")
+        entities_list = parse_entities(entities_raw)
+        score, category = compute_score(entities_list)
+
+        # Log the demo request
+        await increment_demo(ip_hash)
+
+        new_remaining = remaining - 1
+
+        return {
+            "status": "success",
+            "demo": True,
+            "data": {
+                "sanitized_content": sanitized,
+                "safety_score": score,
+                "risk_category": category,
+                "entities": entities_list,
+                "truncated": truncated,
+                "original_length": len(req.text),
+                "analyzed_length": len(text)
+            },
+            "demo_limits": {
+                "requests_used": count + 1,
+                "requests_remaining": new_remaining,
+                "requests_per_hour": DEMO_LIMIT_PER_HOUR,
+                "reset_in": "up to 60 minutes"
+            },
+            "upgrade": {
+                "trial": {
+                    "description": "50 free sanitizations — no payment required",
+                    "how": "POST /sanitize with tx_hash=TRIAL and any wallet_address",
+                    "url": "https://github.com/teodorofodocrispin-cmyk/TrustBoost-PII-Sanitizer#trial"
+                },
+                "paid": {
+                    "description": "10,000 sanitizations — 149 USDC on Solana",
+                    "url": "https://github.com/teodorofodocrispin-cmyk/TrustBoost-PII-Sanitizer#pricing"
+                }
+            }
+        }
+
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "message": "Sanitization failed — please try again"}
+        )
