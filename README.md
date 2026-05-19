@@ -8,6 +8,11 @@ Japanese, French, Italian, and Korean.
 - **Endpoint:** `https://api.trustboost.dev/sanitize`
 - **Stack:** FastAPI · OpenAI `gpt-4o-mini` (temperature 0) · Supabase · Solana payments via Helius
 
+## 🛡️ Live Demo — no registration required
+
+**Try TrustBoost instantly in your browser:**
+👉 https://huggingface.co/spaces/TrustBoost/pii-sanitizer
+
 ## Try it in 10 seconds — no wallet needed
 
 ```bash
