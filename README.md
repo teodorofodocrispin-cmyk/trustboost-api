@@ -85,7 +85,7 @@ Trial mode (`tx_hash="TRIAL"`) gives 50 free sanitizations per `wallet_address`.
 Paid mode requires 149 USDC on Solana to the configured payment wallet, which
 unlocks 10,000 sanitizations per transaction signature.
 
-## Response schema (v2.5.0)
+## Response schema (v2.6.0)
 
 ```json
 {
@@ -132,7 +132,7 @@ unlocks 10,000 sanitizations per transaction signature.
 `risk_category` is the highest-severity tier with at least one entity, or
 `"CLEAN"` if `entities` is empty.
 
-## Server-side redaction enforcement (v2.5.0)
+## Server-side redaction enforcement (v2.6.0)
 
 The model returns two things that have to agree: `cleaned_text` and
 `entities`. In practice they sometimes disagree — the model can correctly
@@ -220,5 +220,6 @@ identifier so they don't share quota with developer wallets.
 - **2.3** — Context-Aware Sanitization: `context` field in `/sanitize` (legal/financial/medical/code/general). Adjusts sanitization depth per context type. Adds `context_applied` to response.
 - **2.4** — Privacy Budget per Agent: `agent_budgets` table in Supabase. Operators configure daily limits once, agents operate autonomously within them.
 - **2.5** — TrustBoost Score: `/score/{wallet}` endpoint. M2M trust verification with trust tier (TRUSTED/VERIFIED/ACTIVE/NEW). Aggregated from audit_log.
+- **2.6** — Proof of Sanitization on Solana: every paid sanitization is anchored on-chain via Helius Memo transaction. Verifiable by anyone at `/verify/{anchor_tx}`. Returns `proof_of_sanitization` object with Solscan link.
 - **2.1** — structured `entities` array, server-side deterministic scoring, hardened JSON parsing, improved Japanese 氏名 detection.
 - **2.0** — multilingual prompt rewrite.
