@@ -927,7 +927,7 @@ async def health():
             "version": "2.6.0",
             "service": "TrustBoost-PII-Sanitizer",
             "infrastructure": "FastAPI+Supabase+Render",
-            "features": ["context_aware_sanitization", "privacy_budget", "trustboost_score"]
+            "features": ["context_aware_sanitization", "privacy_budget", "trustboost_score", "proof_of_sanitization_solana"]
         }
     )
 
