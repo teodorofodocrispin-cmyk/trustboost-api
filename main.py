@@ -1139,6 +1139,27 @@ async def sanitize(req: SanitizeRequest, request: Request):
     # ── Respuesta final ────────────────────────────────────
     # Backwards-compatible. New fields (Fase 1): context_applied
     # New fields (Fase 2): budget (solo si el operador tiene budget activo)
+    # Fase 4 — anchor on-chain para usuarios PAID
+    solana_anchor = None
+    if license_type != "TRIAL":
+        try:
+            solana_anchor = await anchor_proof_on_solana(
+                wallet=wallet,
+                score=score,
+                category=category,
+                text_length=len(req.text)
+            )
+            # Guardar anchor en audit_log
+            if solana_anchor and audit_id:
+                async with httpx.AsyncClient() as client:
+                    await client.patch(
+                        f"{SUPABASE_URL}/rest/v1/audit_log?id=eq.{audit_id}",
+                        headers=SUPABASE_HEADERS,
+                        json={"solana_anchor_tx": solana_anchor}
+                    )
+        except Exception as e:
+            print(f"[Anchor] Non-critical error: {e}")
+
     data = {
         "message": "Content successfully sanitized and logged.",
         "sanitized_content": sanitized,
@@ -1154,6 +1175,12 @@ async def sanitize(req: SanitizeRequest, request: Request):
             "quota_limit": PAID_QUOTA if license_type != "TRIAL" else TRIAL_QUOTA,
         },
     }
+    if solana_anchor:
+        data["proof_of_sanitization"] = {
+            "solana_tx": solana_anchor,
+            "verify_url": f"https://solscan.io/tx/{solana_anchor}",
+            "description": "Immutable proof of sanitization anchored on Solana mainnet"
+        }
     if budget_info.get("budget_active"):
         data["budget"] = {
             "daily_limit": budget_info.get("daily_limit"),
