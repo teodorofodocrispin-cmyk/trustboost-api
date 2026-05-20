@@ -933,6 +933,55 @@ async def health():
 
 # ── Endpoint principal ─────────────────────────────────────
 
+@app.get("/verify/{anchor_tx}")
+async def verify_proof(anchor_tx: str):
+    """
+    Public endpoint to verify a Proof of Sanitization anchor on Solana.
+    Anyone can verify that a sanitization occurred at a specific time.
+    No authentication required — the proof is public and immutable.
+    """
+    try:
+        # Check if anchor exists in audit_log
+        async with httpx.AsyncClient() as client:
+            r = await client.get(
+                f"{SUPABASE_URL}/rest/v1/audit_log",
+                headers=SUPABASE_HEADERS,
+                params={
+                    "solana_anchor_tx": f"eq.{anchor_tx}",
+                    "select": "id,wallet_address,safety_score,risk_category,context,created_at,solana_anchor_tx"
+                }
+            )
+            if r.status_code == 200 and r.json():
+                record = r.json()[0]
+                return {
+                    "status": "verified",
+                    "proof": {
+                        "solana_tx": anchor_tx,
+                        "verify_url": f"https://solscan.io/tx/{anchor_tx}",
+                        "sanitization_timestamp": record.get("created_at"),
+                        "wallet_address": record.get("wallet_address"),
+                        "safety_score": record.get("safety_score"),
+                        "risk_category": record.get("risk_category"),
+                        "context": record.get("context"),
+                        "description": "This sanitization is immutably anchored on Solana mainnet"
+                    }
+                }
+            else:
+                return JSONResponse(
+                    status_code=404,
+                    content={
+                        "status": "not_found",
+                        "message": "No sanitization record found for this Solana transaction",
+                        "anchor_tx": anchor_tx,
+                        "note": "Only paid sanitizations are anchored on Solana"
+                    }
+                )
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "message": "Verification failed — please try again"}
+        )
+
 @app.post("/sanitize")
 async def sanitize(req: SanitizeRequest, request: Request):
 
