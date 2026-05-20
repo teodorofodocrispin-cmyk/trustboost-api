@@ -81,7 +81,7 @@ async def mcp_server_card():
         "tools": ["sanitize_pii"],
         "auth": {"type": "none"},
         "context_modes": ["general", "legal", "code", "financial", "medical"],
-        "features": ["context_aware_sanitization", "privacy_budget", "trustboost_score"]
+        "features": ["context_aware_sanitization", "privacy_budget", "trustboost_score", "proof_of_sanitization_solana"]
     }
 
 SUPABASE_HEADERS = {
