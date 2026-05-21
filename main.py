@@ -1118,38 +1118,6 @@ X402_PAYMENT_INFO = {
     "agent_card": "https://api.trustboost.dev/.well-known/agent-card.json"
 }
 
-# ── Alias endpoints — agent-friendly naming ───────────────
-# Some agents infer endpoint names from capability descriptions.
-# These aliases capture that traffic and redirect to core endpoints.
-
-class RedactRequest(BaseModel):
-    text: str
-    tx_hash: Optional[str] = None
-    wallet_address: Optional[str] = None
-    context: Optional[str] = "general"
-
-@app.post("/redact")
-async def redact(req: RedactRequest, request: Request):
-    """Alias for /sanitize — captures agents that infer endpoint names."""
-    from fastapi import Request as FastAPIRequest
-    sanitize_req = SanitizeRequest(
-        text=req.text,
-        tx_hash=req.tx_hash,
-        wallet_address=req.wallet_address,
-        context=req.context
-    )
-    return await sanitize(sanitize_req, request)
-
-@app.post("/detect")
-async def detect(req: DemoRequest, request: Request):
-    """Alias for /demo — captures agents that infer endpoint names."""
-    return await demo_sanitize(req, request)
-
-@app.get("/anchor/{anchor_tx}")
-async def anchor_verify(anchor_tx: str):
-    """Alias for /verify/{anchor_tx} — captures agents looking for anchor endpoint."""
-    return await verify_proof(anchor_tx)
-
 @app.post("/sanitize")
 async def sanitize(req: SanitizeRequest, request: Request):
 
@@ -1715,3 +1683,23 @@ async def demo_sanitize(req: DemoRequest, request: Request):
             status_code=500,
             content={"status": "error", "message": "Sanitization failed — please try again"}
         )
+
+
+# ── Alias endpoints — agent-friendly naming ───────────────
+# Agents infer endpoint names from capability descriptions.
+# These aliases capture that traffic and redirect to core endpoints.
+
+@app.post("/redact")
+async def redact(req: SanitizeRequest, request: Request):
+    """Alias for /sanitize — captures agents that infer endpoint names."""
+    return await sanitize(req, request)
+
+@app.post("/detect")
+async def detect(req: DemoRequest, request: Request):
+    """Alias for /demo — captures agents that infer endpoint names."""
+    return await demo_sanitize(req, request)
+
+@app.get("/anchor/{anchor_tx}")
+async def anchor_verify(anchor_tx: str):
+    """Alias for /verify/{anchor_tx} — captures agents looking for anchor endpoint."""
+    return await verify_proof(anchor_tx)
