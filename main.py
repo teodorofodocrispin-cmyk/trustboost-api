@@ -711,7 +711,7 @@ Empty input schema:
 
 class SanitizeRequest(BaseModel):
     text: str
-    tx_hash: str
+    tx_hash: Optional[str] = None  # Optional — None triggers x402 payment response
     wallet_address: Optional[str] = None
     context: str = "general"  # ← Fase 1: opcional, default general, 100% backward-compatible
 
