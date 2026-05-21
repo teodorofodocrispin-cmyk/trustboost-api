@@ -1085,6 +1085,39 @@ async def verify_proof(anchor_tx: str):
             content={"status": "error", "message": "Verification failed — please try again"}
         )
 
+# ── x402 Payment Protocol Support ─────────────────────────
+# When an agent calls /sanitize without a valid tx_hash,
+# TrustBoost responds with HTTP 402 Payment Required
+# containing all the information the agent needs to pay
+# autonomously and retry — no human intervention required.
+
+X402_PAYMENT_INFO = {
+    "x402_version": "1.0",
+    "accepts": [
+        {
+            "scheme": "exact",
+            "network": "solana-mainnet",
+            "currency": "USDC",
+            "amount": "149000000",
+            "decimals": 6,
+            "payment_address": "giu4VciTkfWJNG1oeP6SzHEJwmabikJSMB91GaFNWE4",
+            "description": "149 USDC for 10,000 sanitizations with on-chain proof"
+        },
+        {
+            "scheme": "trial",
+            "network": "none",
+            "currency": "none",
+            "amount": "0",
+            "tx_hash": "TRIAL",
+            "description": "50 free sanitizations per wallet — use tx_hash=TRIAL"
+        }
+    ],
+    "resource": "https://api.trustboost.dev/sanitize",
+    "description": "PII sanitization with Proof of Sanitization on Solana",
+    "verify_endpoint": "https://api.trustboost.dev/verify/{anchor_tx}",
+    "agent_card": "https://api.trustboost.dev/.well-known/agent-card.json"
+}
+
 @app.post("/sanitize")
 async def sanitize(req: SanitizeRequest, request: Request):
 
@@ -1098,6 +1131,42 @@ async def sanitize(req: SanitizeRequest, request: Request):
         context = "general"  # fallback silencioso — no rompe clientes existentes
 
     wallet = req.wallet_address or "anonymous"
+
+    # ── x402 Payment Protocol ─────────────────────────────
+    # If no tx_hash provided → return 402 with payment info
+    # This allows autonomous agents to discover payment terms
+    # and pay without human intervention (x402 standard)
+    if not req.tx_hash or req.tx_hash.strip() == "":
+        return JSONResponse(
+            status_code=402,
+            content={
+                "status": "payment_required",
+                "message": "Payment required. Use tx_hash=TRIAL for 50 free sanitizations, or send 149 USDC on Solana mainnet.",
+                "x402": X402_PAYMENT_INFO,
+                "quick_start": {
+                    "trial": {
+                        "tx_hash": "TRIAL",
+                        "wallet_address": "your-agent-id",
+                        "quota": 50,
+                        "cost": 0
+                    },
+                    "paid": {
+                        "step1": f"Send 149 USDC to {PAYMENT_WALLET} on Solana mainnet",
+                        "step2": "Use the resulting tx_hash in your request",
+                        "quota": 10000,
+                        "proof": "Every sanitization anchored on Solana — verifiable at /verify/{anchor_tx}"
+                    }
+                }
+            },
+            headers={
+                "X-402-Payment": "required",
+                "X-402-Network": "solana-mainnet",
+                "X-402-Currency": "USDC",
+                "X-402-Amount": "149",
+                "X-402-Address": PAYMENT_WALLET,
+                "X-402-Trial": "tx_hash=TRIAL for 50 free sanitizations"
+            }
+        )
 
     # ── Fase 2: verificar privacy budget ──────────────────
     # El operator_id es la wallet. Sin wallet → sin budget (anónimo).
