@@ -140,16 +140,18 @@ async def agent_card():
                 "description": "Pay per sanitization at $0.0149 USDC"
             }
         },
-        "capabilities": [
-            "pii_detection",
-            "pii_redaction",
-            "context_aware_sanitization",
-            "proof_of_sanitization_on_chain",
-            "privacy_budget_per_agent",
-            "m2m_trust_score",
-            "mcp_server",
-            "multilingual_8_languages"
-        ],
+        "capabilities": {
+            "pii_detection": True,
+            "pii_redaction": True,
+            "context_aware_sanitization": True,
+            "proof_of_sanitization_on_chain": True,
+            "privacy_budget_per_agent": True,
+            "m2m_trust_score": True,
+            "mcp_server": True,
+            "multilingual_8_languages": True,
+            "x402_compatible": True,
+            "fail_closed": True
+        },
         "languages": ["EN", "ES-LATAM", "PT-BR", "PT-PT", "DE", "JA", "FR", "IT", "KO"],
         "context_modes": ["general", "legal", "financial", "medical", "code"],
         "compliance": ["GDPR", "LGPD", "APPI", "CCPA", "EU-AI-Act-2026"],
