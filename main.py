@@ -1148,7 +1148,6 @@ async def sanitize(req: SanitizeRequest, request: Request):
     if not req.tx_hash or req.tx_hash.strip() == "":
         return JSONResponse(
             status_code=402,
-            headers={"Cache-Control": "no-store"},
             content={
                 "status": "payment_required",
                 "message": "Payment required. Use tx_hash=TRIAL for 50 free sanitizations, or send 149 USDC on Solana mainnet.",
