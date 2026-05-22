@@ -6,6 +6,7 @@ import base58
 from typing import Optional, List, Literal
 import httpx
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from openai import AsyncOpenAI
 from pydantic import BaseModel
@@ -62,7 +63,15 @@ PAID_QUOTA            = int(os.getenv("PAID_QUOTA", "10000"))
 REQUIRED_PAYMENT_USDC = int(os.getenv("REQUIRED_PAYMENT_USDC", "149"))
 
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-app = FastAPI(title="TrustBoost PII Sanitizer v2.5")  # ← v2.5
+app = FastAPI(title="TrustBoost PII Sanitizer v2.6.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-Payment", "X-402-Payment", "payment-signature", "x-payment"],
+    expose_headers=["X-402-Payment", "X-402-Network", "X-402-Currency", "X-402-Amount", "X-402-Address", "X-402-Trial"],
+)
 
 from demo_router import router as demo_router
 app.include_router(demo_router)
