@@ -1,6 +1,7 @@
 import os
 import json
 from datetime import datetime, timezone
+from fastapi.middleware.cors import CORSMiddleware
 import hashlib
 import base58
 from typing import Optional, List, Literal
@@ -62,7 +63,31 @@ PAID_QUOTA            = int(os.getenv("PAID_QUOTA", "10000"))
 REQUIRED_PAYMENT_USDC = int(os.getenv("REQUIRED_PAYMENT_USDC", "149"))
 
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-app = FastAPI(title="TrustBoost PII Sanitizer v2.5")  # ← v2.5
+app = FastAPI(title="TrustBoost PII Sanitizer v2.6.0")
+
+# CORS — required for browser-hosted agents and x402 payment retry
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=[
+        "Content-Type",
+        "Authorization",
+        "X-Payment",
+        "X-402-Payment",
+        "payment-signature",
+        "x-payment",
+    ],
+    expose_headers=[
+        "X-402-Payment",
+        "X-402-Network",
+        "X-402-Currency",
+        "X-402-Amount",
+        "X-402-Address",
+        "X-402-Trial",
+    ]
+)
 
 from demo_router import router as demo_router
 app.include_router(demo_router)
@@ -1139,6 +1164,7 @@ async def sanitize(req: SanitizeRequest, request: Request):
     if not req.tx_hash or req.tx_hash.strip() == "":
         return JSONResponse(
             status_code=402,
+            headers={"Cache-Control": "no-store"},
             content={
                 "status": "payment_required",
                 "message": "Payment required. Use tx_hash=TRIAL for 50 free sanitizations, or send 149 USDC on Solana mainnet.",
