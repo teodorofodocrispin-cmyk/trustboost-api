@@ -102,7 +102,7 @@ async def mcp_execute(request: Request):
                 "result": {
                     "protocolVersion": "2024-11-05",
                     "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "trustboost", "version": "2.2.0"}
+                    "serverInfo": {"name": "trustboost", "version": "2.6.0"}
                 }
             })
 
