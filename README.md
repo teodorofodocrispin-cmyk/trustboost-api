@@ -216,7 +216,9 @@ identifier so they don't share quota with developer wallets.
 
 ## Versioning
 
-- **2.2** — server-side redaction enforcer, `redaction_source` telemetry, `unmatched_entities` audit field. Conservative replace-all-occurrences. Fixes the v2.1 class of bug where an entity could appear in `entities[]` without being removed from `sanitized_content`.
+- **2.6** — Proof of Sanitization on Solana via Helius. Every paid sanitization anchored on-chain. Verifiable at `/verify/{anchor_tx}`. x402 native — HTTP 402 with autonomous payment instructions. CORS for browser agents. agent-card.json for Circle Agent Stack discovery.
+- **2.5** — Context-Aware Sanitization, Privacy Budget per Agent, TrustBoost Score M2M.
+- **2.2** — server-side redaction enforcer, `redaction_source` telemetry, `unmatched_entities` audit field.
 - **2.3** — Context-Aware Sanitization: `context` field in `/sanitize` (legal/financial/medical/code/general). Adjusts sanitization depth per context type. Adds `context_applied` to response.
 - **2.4** — Privacy Budget per Agent: `agent_budgets` table in Supabase. Operators configure daily limits once, agents operate autonomously within them.
 - **2.5** — TrustBoost Score: `/score/{wallet}` endpoint. M2M trust verification with trust tier (TRUSTED/VERIFIED/ACTIVE/NEW). Aggregated from audit_log.
