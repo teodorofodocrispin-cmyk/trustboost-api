@@ -11,7 +11,7 @@ router = APIRouter()
 MCP_MANIFEST = {
     "schema_version": "v1",
     "name": "trustboost",
-    "description": "Sanitize PII from text before it reaches LLMs. Redacts emails, phone numbers, national IDs, private keys, and financial data. Supports EN, ES (LATAM), PT (BR/PT), DE, JA.",
+    "description": "Sanitize PII from text before it reaches LLMs. Redacts emails, phone numbers, national IDs, private keys, and financial data. Supports 8 languages: EN, ES (LATAM), PT (BR/PT), DE, JA, FR, IT, KO. Proof of Sanitization anchored on Solana. x402 compatible. EU AI Act compliant.",
     "tools": [
         {
             "name": "sanitize_pii",
