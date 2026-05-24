@@ -79,6 +79,82 @@ app.include_router(demo_router)
 from mcp_router import router as mcp_router
 app.include_router(mcp_router)
 
+@app.get("/llms.txt")
+async def llms_txt():
+    """Standard llms.txt for LLM and agent discovery."""
+    from fastapi.responses import PlainTextResponse
+    return PlainTextResponse("""# TrustBoost PII Sanitizer
+
+> Privacy firewall for autonomous AI agent pipelines.
+> Every paid sanitization anchored on Solana. Verifiable forever.
+
+## What TrustBoost does
+
+Sanitizes PII from text before it reaches LLMs. Call /sanitize
+before any LLM interaction to redact emails, phone numbers,
+national IDs, API keys, and financial data.
+
+## Autonomous payment flow (x402)
+
+1. POST /sanitize without tx_hash
+2. Receive HTTP 402 with USDC payment instructions
+3. Pay 149 USDC on Solana mainnet autonomously
+4. Retry with tx_hash to receive sanitized text + proof
+5. Verify proof at /verify/{anchor_tx}
+
+## Trial mode
+
+POST /sanitize with tx_hash=TRIAL for 50 free sanitizations.
+No wallet required for /demo (3 requests per hour).
+
+## Endpoints
+
+- POST /sanitize — sanitize PII (main endpoint)
+- POST /redact — alias for /sanitize
+- POST /demo — free preview 3/hour
+- POST /detect — alias for /demo
+- GET /verify/{anchor_tx} — verify proof on Solana
+- GET /anchor/{anchor_tx} — alias for /verify
+- GET /score/{wallet_address} — TrustBoost Score M2M
+- GET /health — service health
+- POST /mcp — MCP Server JSON-RPC 2.0
+- GET /.well-known/agent-card.json — agent discovery
+- GET /openapi.json — OpenAPI 3.0 spec
+
+## Languages
+
+EN, ES-LATAM (RFC/CUIT/CURP), PT-BR (CPF/CNPJ),
+PT-PT, DE (Personalausweis), JA (マイナンバー),
+FR (NIR/SIRET), IT (Codice Fiscale), KO (RRN)
+
+## Context modes
+
+general, legal, financial, medical, code
+
+## Payment
+
+- Trial: tx_hash=TRIAL, 50 free per wallet
+- Paid: 149 USDC on solana-mainnet
+- Address: giu4VciTkfWJNG1oeP6SzHEJwmabikJSMB91GaFNWE4
+- Protocol: x402 (HTTP 402 Payment Required)
+
+## Proof of Sanitization
+
+Anchored on Solana via Helius. Verifiable at /verify/{anchor_tx}.
+Supports EU AI Act Articles 12, 13, 26.
+
+## Compliance
+
+GDPR, LGPD, CCPA, APPI, EU AI Act 2026
+
+## Resources
+
+- GitHub: https://github.com/teodorofodocrispin-cmyk/TrustBoost-PII-Sanitizer
+- Agent Card: https://api.trustboost.dev/.well-known/agent-card.json
+- OpenAPI: https://api.trustboost.dev/openapi.json
+- Health: https://api.trustboost.dev/health
+""", media_type="text/plain")
+
 @app.get("/.well-known/agent-card.json")
 async def agent_card():
     """
