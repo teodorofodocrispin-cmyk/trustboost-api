@@ -1217,6 +1217,36 @@ async def sanitize(req: SanitizeRequest, request: Request):
     if not req.text or not req.text.strip():
         return JSONResponse(status_code=200, content={"status": "empty_input"})
 
+    # ── Límite de caracteres por request ──────────────────────
+    MAX_CHARS = 10000
+    text_length = len(req.text)
+
+    if text_length > MAX_CHARS:
+        chunks_needed = -(-text_length // MAX_CHARS)
+        return JSONResponse(
+            status_code=413,
+            content={
+                "status": "error",
+                "code": "TEXT_TOO_LONG",
+                "message": f"Text is {text_length:,} chars. Maximum is {MAX_CHARS:,} chars per request.",
+                "action": "split_and_retry",
+                "split": {
+                    "max_chars_per_chunk": MAX_CHARS,
+                    "chunks_needed": chunks_needed,
+                    "sanitizations_needed": chunks_needed,
+                    "quota_cost": f"{chunks_needed} sanitizations from your quota"
+                },
+                "how_to_split": {
+                    "step_1": f"Divide your text into {chunks_needed} parts of max {MAX_CHARS:,} chars each",
+                    "step_2": "Send each part as a separate POST /sanitize request",
+                    "step_3": "Each part uses 1 sanitization from your quota",
+                    "example_python": "chunks = [text[i:i+10000] for i in range(0, len(text), 10000)]"
+                },
+                "why": "Fair usage limit — ensures consistent performance for all agents.",
+                "docs": "https://api.trustboost.dev/llms.txt"
+            }
+        )
+
     # Fase 1: validar y normalizar context
     context = req.context.lower().strip() if req.context else "general"
     if context not in VALID_CONTEXTS:
