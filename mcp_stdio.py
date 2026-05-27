@@ -1,16 +1,35 @@
 #!/usr/bin/env python3
 """
-TrustBoost MCP stdio wrapper for Glama compatibility.
-Bridges stdio MCP protocol to the HTTP FastAPI server.
+TrustBoost MCP stdio wrapper for Glama.
+Zero external dependencies — pure Python stdlib only.
 """
 import sys
 import json
-import asyncio
-import httpx
+import urllib.request
+import urllib.error
 
 API_URL = "http://localhost:8000"
 
-async def handle_request(request: dict) -> dict:
+def call_sanitize(text, tx_hash="TRIAL", wallet="mcp-agent"):
+    payload = json.dumps({
+        "text": text,
+        "tx_hash": tx_hash,
+        "wallet_address": wallet
+    }).encode()
+    req = urllib.request.Request(
+        f"{API_URL}/sanitize",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST"
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read())
+            return data.get("data", {}).get("sanitized_content", "")
+    except Exception as e:
+        return f"[BLOCKED: {str(e)}]"
+
+def handle(request):
     method = request.get("method", "")
     req_id = request.get("id")
 
@@ -35,11 +54,11 @@ async def handle_request(request: dict) -> dict:
             "result": {
                 "tools": [{
                     "name": "sanitize_pii",
-                    "description": "Sanitize PII from text before sending to LLMs.",
+                    "description": "Sanitize PII from text before sending to LLMs. Returns sanitized text with PII replaced by [REDACTED].",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
-                            "text": {"type": "string", "description": "Text to sanitize"},
+                            "text": {"type": "string"},
                             "tx_hash": {"type": "string", "default": "TRIAL"},
                             "wallet_address": {"type": "string", "default": "mcp-agent"}
                         },
@@ -51,38 +70,19 @@ async def handle_request(request: dict) -> dict:
 
     if method == "tools/call":
         params = request.get("params", {})
-        tool_name = params.get("name")
-        tool_input = params.get("arguments", {})
-
-        if tool_name == "sanitize_pii":
-            try:
-                async with httpx.AsyncClient(timeout=30) as client:
-                    r = await client.post(
-                        f"{API_URL}/sanitize",
-                        json={
-                            "text": tool_input.get("text", ""),
-                            "tx_hash": tool_input.get("tx_hash", "TRIAL"),
-                            "wallet_address": tool_input.get("wallet_address", "mcp-agent")
-                        }
-                    )
-                    data = r.json()
-                    sanitized = data.get("data", {}).get("sanitized_content", "")
-                    return {
-                        "jsonrpc": "2.0",
-                        "id": req_id,
-                        "result": {
-                            "content": [{"type": "text", "text": sanitized}]
-                        }
-                    }
-            except Exception as e:
-                return {
-                    "jsonrpc": "2.0",
-                    "id": req_id,
-                    "result": {
-                        "content": [{"type": "text", "text": f"[BLOCKED: {str(e)}]"}],
-                        "isError": True
-                    }
-                }
+        name = params.get("name")
+        args = params.get("arguments", {})
+        if name == "sanitize_pii":
+            result = call_sanitize(
+                args.get("text", ""),
+                args.get("tx_hash", "TRIAL"),
+                args.get("wallet_address", "mcp-agent")
+            )
+            return {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "result": {"content": [{"type": "text", "text": result}]}
+            }
 
     return {
         "jsonrpc": "2.0",
@@ -90,31 +90,25 @@ async def handle_request(request: dict) -> dict:
         "error": {"code": -32601, "message": f"Method not found: {method}"}
     }
 
-
-async def main():
-    loop = asyncio.get_event_loop()
-    reader = asyncio.StreamReader()
-    protocol = asyncio.StreamReaderProtocol(reader)
-    await loop.connect_read_pipe(lambda: protocol, sys.stdin)
-
-    writer_transport, writer_protocol = await loop.connect_write_pipe(
-        asyncio.BaseProtocol, sys.stdout.buffer
-    )
-    writer = asyncio.StreamWriter(writer_transport, writer_protocol, None, loop)
-
-    while True:
+def main():
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
         try:
-            line = await reader.readline()
-            if not line:
-                break
-            request = json.loads(line.decode())
-            response = await handle_request(request)
+            request = json.loads(line)
+            response = handle(request)
             if response is not None:
-                writer.write((json.dumps(response) + "\n").encode())
-                await writer.drain()
-        except Exception:
-            break
-
+                sys.stdout.write(json.dumps(response) + "\n")
+                sys.stdout.flush()
+        except Exception as e:
+            error = {
+                "jsonrpc": "2.0",
+                "id": None,
+                "error": {"code": -32700, "message": str(e)}
+            }
+            sys.stdout.write(json.dumps(error) + "\n")
+            sys.stdout.flush()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
