@@ -1401,7 +1401,30 @@ async def validation_exception_handler(request: Request, exc):
 async def sanitize(req: SanitizeRequest, request: Request):
 
     # Validación básica
+    # Si no hay texto y no hay tx_hash → responder 402 para x402 discovery
     if not req.text or not req.text.strip():
+        if not req.tx_hash or req.tx_hash.strip() == "":
+            import base64, json as _json
+            return JSONResponse(
+                status_code=402,
+                content={
+                    "status": "payment_required",
+                    "message": "Payment required. Use tx_hash=TRIAL for 50 free sanitizations, or send 149 USDC on Solana mainnet.",
+                    "x402": X402_PAYMENT_INFO,
+                    "quick_start": {
+                        "trial": {"tx_hash": "TRIAL", "wallet_address": "your-agent-id", "quota": 50, "cost": 0},
+                        "paid": {"step1": f"Send 149 USDC to {PAYMENT_WALLET} on Solana mainnet", "step2": "Use the resulting tx_hash in your request", "quota": 10000}
+                    }
+                },
+                headers={
+                    "X-402-Payment": "required",
+                    "X-402-Network": "solana-mainnet",
+                    "X-402-Currency": "USDC",
+                    "X-402-Amount": "149",
+                    "X-402-Address": PAYMENT_WALLET,
+                    "PAYMENT-REQUIRED": base64.b64encode(_json.dumps(X402_PAYMENT_INFO).encode()).decode()
+                }
+            )
         return JSONResponse(status_code=200, content={"status": "empty_input"})
 
     # ── Límite de caracteres por request ──────────────────────
