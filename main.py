@@ -1361,7 +1361,26 @@ X402_PAYMENT_INFO = {
                 "tags": ["pii", "privacy", "sanitization", "gdpr", "eu-ai-act", "solana", "x402", "m2m"],
                 "logoUrl": "https://api.trustboost.dev/health",
                 "termsUrl": "https://github.com/teodorofodocrispin-cmyk/TrustBoost-PII-Sanitizer/blob/main/PRIVACY.md",
-                "homepage": "https://github.com/teodorofodocrispin-cmyk/TrustBoost-PII-Sanitizer"
+                "homepage": "https://github.com/teodorofodocrispin-cmyk/TrustBoost-PII-Sanitizer",
+                "input": {
+                    "text": "Contact John at john@example.com, SSN 123-45-6789",
+                    "tx_hash": "TRIAL",
+                    "wallet_address": "bazaar-agent",
+                    "context": "general"
+                },
+                "output": {
+                    "sanitized_content": "Contact [REDACTED] at [REDACTED], SSN [REDACTED]",
+                    "safety_score": 0.6,
+                    "risk_category": "PRIVATE",
+                    "entities_removed": True,
+                    "entities": [
+                        {"type": "full_name", "category": "PRIVATE", "redacted_text": "John"},
+                        {"type": "email", "category": "PRIVATE", "redacted_text": "john@example.com"},
+                        {"type": "ssn", "category": "PRIVATE", "redacted_text": "123-45-6789"}
+                    ],
+                    "context_applied": "general",
+                    "usage_metrics": {"quota_remaining": 49, "quota_limit": 50}
+                }
             },
             "outputType": "application/json",
             "outputExample": {
