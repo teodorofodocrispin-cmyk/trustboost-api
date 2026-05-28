@@ -1331,7 +1331,7 @@ async def verify_proof(anchor_tx: str):
 # autonomously and retry — no human intervention required.
 
 X402_PAYMENT_INFO = {
-    "x402_version": "1.0",
+    "x402_version": "2",
     "accepts": [
         {
             "scheme": "exact",
@@ -1340,22 +1340,62 @@ X402_PAYMENT_INFO = {
             "amount": "149000000",
             "decimals": 6,
             "payment_address": "giu4VciTkfWJNG1oeP6SzHEJwmabikJSMB91GaFNWE4",
+            "maxTimeoutSeconds": 300,
             "description": "149 USDC for 10,000 sanitizations with on-chain proof"
-        },
-        {
-            "scheme": "trial",
-            "network": "none",
-            "currency": "none",
-            "amount": "0",
-            "tx_hash": "TRIAL",
-            "description": "50 free sanitizations per wallet — use tx_hash=TRIAL"
         }
     ],
     "resource": "https://api.trustboost.dev/sanitize",
     "description": "PII sanitization with Proof of Sanitization on Solana",
     "verify_endpoint": "https://api.trustboost.dev/verify/{anchor_tx}",
-    "agent_card": "https://api.trustboost.dev/.well-known/agent-card.json"
+    "agent_card": "https://api.trustboost.dev/.well-known/agent-card.json",
+    "bazaar": {
+        "name": "TrustBoost PII Sanitizer",
+        "category": "privacy",
+        "tags": ["pii", "privacy", "sanitization", "gdpr", "eu-ai-act", "solana", "x402", "m2m"],
+        "output_type": "application/json",
+        "output_example": {
+            "sanitized_content": "Contact [REDACTED] at [REDACTED]",
+            "safety_score": 0.6,
+            "risk_category": "PRIVATE",
+            "entities_removed": True
+        },
+        "schema": {
+            "input": {"text": "string (required)", "context": "general|legal|financial|medical|code"},
+            "output": {"sanitized_content": "string", "safety_score": "float", "risk_category": "string", "entities": "array"}
+        }
+    }
 }
+
+@app.exception_handler(422)
+async def validation_exception_handler(request: Request, exc):
+    """Return 402 instead of 422 when /sanitize receives no body.
+    Allows x402 validators to discover payment requirements without a valid payload.
+    """
+    if request.url.path in ["/sanitize", "/redact"]:
+        import base64, json
+        return JSONResponse(
+            status_code=402,
+            content={
+                "status": "payment_required",
+                "message": "Payment required. Use tx_hash=TRIAL for 50 free sanitizations, or send 149 USDC on Solana mainnet.",
+                "x402": X402_PAYMENT_INFO,
+                "quick_start": {
+                    "trial": {"tx_hash": "TRIAL", "wallet_address": "your-agent-id", "quota": 50, "cost": 0},
+                    "paid": {"step1": f"Send 149 USDC to {PAYMENT_WALLET} on Solana mainnet", "step2": "Use the resulting tx_hash in your request", "quota": 10000}
+                }
+            },
+            headers={
+                "X-402-Payment": "required",
+                "X-402-Network": "solana-mainnet",
+                "X-402-Currency": "USDC",
+                "X-402-Amount": "149",
+                "X-402-Address": PAYMENT_WALLET,
+                "PAYMENT-REQUIRED": base64.b64encode(json.dumps(X402_PAYMENT_INFO).encode()).decode()
+            }
+        )
+    from fastapi.exception_handlers import request_validation_exception_handler
+    return await request_validation_exception_handler(request, exc)
+
 
 @app.post("/sanitize")
 async def sanitize(req: SanitizeRequest, request: Request):
@@ -1433,7 +1473,8 @@ async def sanitize(req: SanitizeRequest, request: Request):
                 "X-402-Currency": "USDC",
                 "X-402-Amount": "149",
                 "X-402-Address": PAYMENT_WALLET,
-                "X-402-Trial": "tx_hash=TRIAL for 50 free sanitizations"
+                "X-402-Trial": "tx_hash=TRIAL for 50 free sanitizations",
+                "PAYMENT-REQUIRED": __import__("base64").b64encode(__import__("json").dumps(X402_PAYMENT_INFO).encode()).decode()
             }
         )
 
