@@ -1397,6 +1397,30 @@ async def validation_exception_handler(request: Request, exc):
     return await request_validation_exception_handler(request, exc)
 
 
+@app.get("/sanitize")
+async def sanitize_discovery(request: Request):
+    """GET /sanitize — x402 Bazaar discovery endpoint.
+    Returns 402 with PAYMENT-REQUIRED header for validator crawlers.
+    """
+    import base64, json as _json
+    return JSONResponse(
+        status_code=402,
+        content={
+            "status": "payment_required",
+            "message": "Payment required. Use tx_hash=TRIAL for 50 free sanitizations, or send 149 USDC on Solana mainnet.",
+            "x402": X402_PAYMENT_INFO
+        },
+        headers={
+            "X-402-Payment": "required",
+            "X-402-Network": "solana-mainnet",
+            "X-402-Currency": "USDC",
+            "X-402-Amount": "149",
+            "X-402-Address": PAYMENT_WALLET,
+            "PAYMENT-REQUIRED": base64.b64encode(_json.dumps(X402_PAYMENT_INFO).encode()).decode()
+        }
+    )
+
+
 @app.post("/sanitize")
 async def sanitize(req: SanitizeRequest, request: Request):
 
