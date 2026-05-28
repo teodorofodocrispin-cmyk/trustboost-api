@@ -262,7 +262,36 @@ async def agent_card():
         "open_source": True,
         "license": "MIT",
         "repository": "https://github.com/teodorofodocrispin-cmyk/TrustBoost-PII-Sanitizer",
-        "demo": "https://huggingface.co/spaces/TrustBoost/pii-sanitizer"
+        "demo": "https://huggingface.co/spaces/TrustBoost/pii-sanitizer",
+        "defaultInputModes": ["text/plain", "application/json"],
+        "defaultOutputModes": ["application/json"],
+        "skills": [
+            {
+                "id": "sanitize_pii",
+                "name": "PII Sanitization",
+                "description": "Detects and redacts PII from text before it reaches LLMs. Supports 8 languages and 5 context modes. Returns sanitized_content, safety_score, risk_category, and entities[].",
+                "tags": ["pii", "privacy", "sanitization", "gdpr", "compliance", "llm-security"],
+                "examples": ["Sanitize user input before sending to an LLM", "Redact PII from financial documents", "Remove personal identifiers from medical notes"],
+                "inputModes": ["text/plain", "application/json"],
+                "outputModes": ["application/json"]
+            },
+            {
+                "id": "verify_proof",
+                "name": "Proof of Sanitization Verification",
+                "description": "Verifies a Proof of Sanitization anchored on Solana. Returns immutable audit trail for EU AI Act compliance.",
+                "tags": ["proof", "solana", "audit", "eu-ai-act", "compliance"],
+                "inputModes": ["text/plain"],
+                "outputModes": ["application/json"]
+            },
+            {
+                "id": "trustboost_score",
+                "name": "TrustBoost Score",
+                "description": "M2M trust verification — returns trust tier (NEW/ACTIVE/VERIFIED/TRUSTED) based on agent sanitization history.",
+                "tags": ["trust", "m2m", "score", "reputation"],
+                "inputModes": ["text/plain"],
+                "outputModes": ["application/json"]
+            }
+        ]
     }
 
 @app.get("/.well-known/mcp-server-card.json")
