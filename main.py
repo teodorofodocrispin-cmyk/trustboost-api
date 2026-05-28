@@ -1331,37 +1331,43 @@ async def verify_proof(anchor_tx: str):
 # autonomously and retry — no human intervention required.
 
 X402_PAYMENT_INFO = {
-    "x402_version": "2",
+    "x402Version": 2,
     "accepts": [
         {
             "scheme": "exact",
-            "network": "solana-mainnet",
-            "currency": "USDC",
+            "network": "solana",
+            "asset": "USDC",
             "amount": "149000000",
             "decimals": 6,
-            "payment_address": "giu4VciTkfWJNG1oeP6SzHEJwmabikJSMB91GaFNWE4",
+            "payTo": "giu4VciTkfWJNG1oeP6SzHEJwmabikJSMB91GaFNWE4",
             "maxTimeoutSeconds": 300,
-            "description": "149 USDC for 10,000 sanitizations with on-chain proof"
+            "extra": {
+                "name": "USD Coin",
+                "symbol": "USDC"
+            }
         }
     ],
-    "resource": "https://api.trustboost.dev/sanitize",
-    "description": "PII sanitization with Proof of Sanitization on Solana",
-    "verify_endpoint": "https://api.trustboost.dev/verify/{anchor_tx}",
-    "agent_card": "https://api.trustboost.dev/.well-known/agent-card.json",
-    "bazaar": {
-        "name": "TrustBoost PII Sanitizer",
-        "category": "privacy",
-        "tags": ["pii", "privacy", "sanitization", "gdpr", "eu-ai-act", "solana", "x402", "m2m"],
-        "output_type": "application/json",
-        "output_example": {
-            "sanitized_content": "Contact [REDACTED] at [REDACTED]",
-            "safety_score": 0.6,
-            "risk_category": "PRIVATE",
-            "entities_removed": True
-        },
-        "schema": {
-            "input": {"text": "string (required)", "context": "general|legal|financial|medical|code"},
-            "output": {"sanitized_content": "string", "safety_score": "float", "risk_category": "string", "entities": "array"}
+    "resource": {
+        "url": "https://api.trustboost.dev/sanitize",
+        "description": "PII sanitization with Proof of Sanitization on Solana",
+        "mimeType": "application/json"
+    },
+    "extensions": {
+        "bazaar": {
+            "name": "TrustBoost PII Sanitizer",
+            "category": "privacy",
+            "tags": ["pii", "privacy", "sanitization", "gdpr", "eu-ai-act", "solana", "x402", "m2m"],
+            "outputType": "application/json",
+            "outputExample": {
+                "sanitized_content": "Contact [REDACTED] at [REDACTED]",
+                "safety_score": 0.6,
+                "risk_category": "PRIVATE",
+                "entities_removed": True
+            },
+            "schema": {
+                "input": {"text": "string (required)", "context": "general|legal|financial|medical|code"},
+                "output": {"sanitized_content": "string", "safety_score": "float", "risk_category": "string", "entities": "array"}
+            }
         }
     }
 }
