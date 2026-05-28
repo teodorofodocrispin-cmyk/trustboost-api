@@ -294,6 +294,124 @@ async def agent_card():
         ]
     }
 
+# ── A2A message/send endpoint ─────────────────────────────
+# Required for full A2A protocol conformance.
+# Allows any A2A-compatible orchestrator (LangGraph, CrewAI, AutoGen)
+# to invoke TrustBoost as a native agent in a multi-agent pipeline.
+
+class A2AMessagePart(BaseModel):
+    type: str = "text"
+    text: Optional[str] = None
+
+class A2AMessage(BaseModel):
+    role: str = "user"
+    parts: List[A2AMessagePart]
+    messageId: Optional[str] = None
+    contextId: Optional[str] = None
+    taskId: Optional[str] = None
+
+class A2ASendRequest(BaseModel):
+    message: A2AMessage
+
+@app.post("/message/send")
+async def a2a_message_send(req: A2ASendRequest, request: Request):
+    """A2A Protocol — message/send endpoint.
+    
+    Accepts A2A-formatted messages and runs PII sanitization.
+    Returns A2A-formatted response with sanitized text.
+    Compatible with: LangGraph, CrewAI, AutoGen, Google A2A orchestrators.
+    """
+    # Extract text from A2A message parts
+    text = ""
+    for part in req.message.parts:
+        if part.type == "text" and part.text:
+            text += part.text + " "
+    text = text.strip()
+
+    if not text:
+        return JSONResponse(status_code=200, content={
+            "jsonrpc": "2.0",
+            "result": {
+                "status": {"state": "completed"},
+                "message": {
+                    "role": "agent",
+                    "parts": [{"type": "text", "text": ""}],
+                    "messageId": req.message.messageId or "",
+                    "contextId": req.message.contextId or "",
+                    "taskId": req.message.taskId or ""
+                }
+            }
+        })
+
+    # Limit to 10K chars
+    if len(text) > 10000:
+        return JSONResponse(status_code=413, content={
+            "error": {"code": -32001, "message": "Text exceeds 10,000 char limit. Split and retry."}
+        })
+
+    # Run sanitization — TRIAL by default for A2A agents
+    try:
+        result = await gpt_sanitize(text, context="general")
+        model_cleaned = result.get("cleaned_text", "") or ""
+        raw_entities = result.get("entities", [])
+        entities_list = []
+        if isinstance(raw_entities, list):
+            for ent in raw_entities:
+                if not isinstance(ent, dict):
+                    continue
+                cat = (ent.get("category") or "").upper()
+                if cat not in RISK_WEIGHTS:
+                    cat = "SENSITIVE"
+                entities_list.append({
+                    "type": str(ent.get("type") or "unknown"),
+                    "category": cat,
+                    "redacted_text": str(ent.get("redacted_text") or ""),
+                })
+        sanitized, _, _ = enforce_redaction(text, model_cleaned, entities_list)
+        score, category = compute_score(entities_list)
+
+        # Log to audit — A2A calls use anonymous wallet
+        await log_audit("A2A", len(text), sanitized, score, category, "a2a-agent", "A2A", "general")
+
+        return JSONResponse(status_code=200, content={
+            "jsonrpc": "2.0",
+            "result": {
+                "status": {"state": "completed"},
+                "message": {
+                    "role": "agent",
+                    "parts": [
+                        {
+                            "type": "text",
+                            "text": sanitized
+                        },
+                        {
+                            "type": "data",
+                            "data": {
+                                "safety_score": score,
+                                "risk_category": category,
+                                "entities_removed": len(entities_list) > 0,
+                                "entities": entities_list,
+                                "original_length": len(text),
+                                "sanitized_length": len(sanitized),
+                                "trustboost_version": "2.6.0",
+                                "upgrade": "POST /sanitize with tx_hash=TRIAL for quota tracking and full features"
+                            }
+                        }
+                    ],
+                    "messageId": req.message.messageId or "",
+                    "contextId": req.message.contextId or "",
+                    "taskId": req.message.taskId or ""
+                }
+            }
+        })
+
+    except Exception as e:
+        return JSONResponse(status_code=500, content={
+            "jsonrpc": "2.0",
+            "error": {"code": -32000, "message": "Sanitization failed — please retry"}
+        })
+
+
 @app.get("/.well-known/mcp-server-card.json")
 async def mcp_server_card():
     return {
