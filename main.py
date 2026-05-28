@@ -1336,7 +1336,7 @@ X402_PAYMENT_INFO = {
         {
             "scheme": "exact",
             "network": "solana",
-            "asset": "USDC",
+            "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
             "amount": "149000000",
             "decimals": 6,
             "payTo": "giu4VciTkfWJNG1oeP6SzHEJwmabikJSMB91GaFNWE4",
@@ -1354,9 +1354,15 @@ X402_PAYMENT_INFO = {
     },
     "extensions": {
         "bazaar": {
-            "name": "TrustBoost PII Sanitizer",
-            "category": "privacy",
-            "tags": ["pii", "privacy", "sanitization", "gdpr", "eu-ai-act", "solana", "x402", "m2m"],
+            "info": {
+                "name": "TrustBoost PII Sanitizer",
+                "description": "Sanitize PII from text before it reaches LLMs. Detects emails, phone numbers, national IDs, API keys, and financial data across 8 languages. Returns sanitized_content, safety_score, and risk_category.",
+                "category": "privacy",
+                "tags": ["pii", "privacy", "sanitization", "gdpr", "eu-ai-act", "solana", "x402", "m2m"],
+                "logoUrl": "https://api.trustboost.dev/health",
+                "termsUrl": "https://github.com/teodorofodocrispin-cmyk/TrustBoost-PII-Sanitizer/blob/main/PRIVACY.md",
+                "homepage": "https://github.com/teodorofodocrispin-cmyk/TrustBoost-PII-Sanitizer"
+            },
             "outputType": "application/json",
             "outputExample": {
                 "sanitized_content": "Contact [REDACTED] at [REDACTED]",
