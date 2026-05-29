@@ -2326,7 +2326,7 @@ async def homepage():
     })
 
 
-@app.get("/robots.txt")
+@app.get("/robots.txt", include_in_schema=False)
 async def robots_txt():
     """robots.txt — allowlist AI crawlers, restrict training bots."""
     from fastapi.responses import PlainTextResponse
@@ -2359,7 +2359,7 @@ Content-Signal: search=yes, ai-input=yes, ai-train=no
 """, media_type="text/plain")
 
 
-@app.get("/sitemap.xml")
+@app.get("/sitemap.xml", include_in_schema=False)
 async def sitemap():
     """sitemap.xml — all indexable URLs."""
     from fastapi.responses import Response
@@ -2379,7 +2379,7 @@ async def sitemap():
     return Response(content=xml, media_type="application/xml")
 
 
-@app.get("/pricing.md")
+@app.get("/pricing.md", include_in_schema=False)
 async def pricing_md():
     """Pricing in markdown — for AI crawlers and agents."""
     from fastapi.responses import PlainTextResponse
@@ -2428,7 +2428,7 @@ teodorofodocrispin@gmail.com
 """, media_type="text/markdown")
 
 
-@app.get("/llms-full.txt")
+@app.get("/llms-full.txt", include_in_schema=False)
 async def llms_full_txt():
     """llms-full.txt — complete product documentation for LLM context."""
     from fastapi.responses import PlainTextResponse
@@ -2570,7 +2570,7 @@ Source code: https://github.com/teodorofodocrispin-cmyk/trustboost-api
 """, media_type="text/plain")
 
 
-@app.get("/index.md")
+@app.get("/index.md", include_in_schema=False)
 async def index_md():
     """index.md — markdown version of homepage for agents that prefer markdown."""
     from fastapi.responses import PlainTextResponse
