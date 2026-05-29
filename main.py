@@ -2248,7 +2248,7 @@ async def anp_agent_description():
 # These endpoints improve AI crawler and agent discovery scores.
 # All are static GET endpoints — zero impact on sanitization logic.
 
-@app.get("/", response_class=None)
+@app.get("/", response_class=None, include_in_schema=False)
 async def homepage():
     """Homepage — HTML for AI crawlers and bots."""
     from fastapi.responses import HTMLResponse
