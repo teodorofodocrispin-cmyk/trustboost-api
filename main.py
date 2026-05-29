@@ -2093,6 +2093,125 @@ async def anchor_verify(anchor_tx: str):
     return await verify_proof(anchor_tx)
 
 
+@app.get("/openapi.json", include_in_schema=False)
+async def openapi_json():
+    """Static OpenAPI 3.0 spec for agent and tool discovery."""
+    return {
+        "openapi": "3.0.0",
+        "info": {
+            "title": "TrustBoost PII Sanitizer",
+            "version": "2.6.0",
+            "description": "Privacy firewall for autonomous AI agent pipelines. Sanitizes PII before text reaches LLMs. Every paid sanitization anchored on Solana.",
+            "contact": {"email": "teodorofodocrispin@gmail.com"},
+            "license": {"name": "MIT", "url": "https://github.com/teodorofodocrispin-cmyk/TrustBoost-PII-Sanitizer/blob/main/LICENSE"}
+        },
+        "servers": [{"url": "https://api.trustboost.dev", "description": "Production"}],
+        "paths": {
+            "/sanitize": {
+                "post": {
+                    "summary": "Sanitize PII from text",
+                    "description": "Detects and redacts PII from text before it reaches an LLM. Supports 8 languages and 5 context modes.",
+                    "operationId": "sanitize_pii",
+                    "requestBody": {
+                        "required": True,
+                        "content": {"application/json": {"schema": {
+                            "type": "object",
+                            "required": ["text"],
+                            "properties": {
+                                "text": {"type": "string", "description": "Text to sanitize. Max 10,000 chars."},
+                                "tx_hash": {"type": "string", "description": "Use TRIAL for 50 free sanitizations.", "default": "TRIAL"},
+                                "wallet_address": {"type": "string", "description": "Agent identifier for quota tracking."},
+                                "context": {"type": "string", "enum": ["general", "legal", "financial", "medical", "code"], "default": "general"}
+                            }
+                        }}}
+                    },
+                    "responses": {
+                        "200": {"description": "Sanitization successful", "content": {"application/json": {"schema": {
+                            "type": "object",
+                            "properties": {
+                                "status": {"type": "string", "example": "success"},
+                                "data": {"type": "object", "properties": {
+                                    "sanitized_content": {"type": "string"},
+                                    "safety_score": {"type": "number", "minimum": 0, "maximum": 1},
+                                    "risk_category": {"type": "string", "enum": ["CLEAN", "SENSITIVE", "PRIVATE", "CRITICAL"]},
+                                    "entities_removed": {"type": "boolean"},
+                                    "entities": {"type": "array", "items": {"type": "object"}},
+                                    "context_applied": {"type": "string"},
+                                    "usage_metrics": {"type": "object"}
+                                }}
+                            }
+                        }}}},
+                        "402": {"description": "Payment required — x402 payment info"},
+                        "413": {"description": "Text too long — split into chunks"}
+                    }
+                },
+                "get": {
+                    "summary": "x402 discovery",
+                    "operationId": "sanitize_discovery",
+                    "description": "Returns HTTP 402 with PAYMENT-REQUIRED header for x402 validators.",
+                    "responses": {"402": {"description": "Payment required"}}
+                }
+            },
+            "/sanitize/preview": {
+                "post": {
+                    "summary": "Free PII preview — no wallet required",
+                    "operationId": "sanitize_preview",
+                    "description": "3 free sanitizations per IP per hour. Max 500 chars.",
+                    "requestBody": {"required": True, "content": {"application/json": {"schema": {"type": "object", "required": ["text"], "properties": {"text": {"type": "string"}}}}}},
+                    "responses": {"200": {"description": "Preview result"}}
+                }
+            },
+            "/score/{wallet_address}": {
+                "get": {
+                    "summary": "TrustBoost Score — M2M trust verification",
+                    "operationId": "get_trustboost_score",
+                    "parameters": [{"name": "wallet_address", "in": "path", "required": True, "schema": {"type": "string"}}],
+                    "responses": {"200": {"description": "Trust score and tier"}}
+                }
+            },
+            "/verify/{anchor_tx}": {
+                "get": {
+                    "summary": "Verify Proof of Sanitization on Solana",
+                    "operationId": "verify_proof",
+                    "parameters": [{"name": "anchor_tx", "in": "path", "required": True, "schema": {"type": "string"}}],
+                    "responses": {"200": {"description": "Proof verified"}, "404": {"description": "Not found"}}
+                }
+            },
+            "/budget/{operator_id}": {
+                "get": {
+                    "summary": "Privacy Budget status",
+                    "operationId": "get_budget_status",
+                    "parameters": [{"name": "operator_id", "in": "path", "required": True, "schema": {"type": "string"}}],
+                    "responses": {"200": {"description": "Budget status"}}
+                }
+            },
+            "/health": {
+                "get": {
+                    "summary": "Service health check",
+                    "operationId": "health_check",
+                    "responses": {"200": {"description": "Service is healthy"}}
+                }
+            },
+            "/mcp": {
+                "post": {
+                    "summary": "MCP Server JSON-RPC 2.0",
+                    "operationId": "mcp_execute",
+                    "description": "Model Context Protocol server. Supports initialize, tools/list, tools/call.",
+                    "responses": {"200": {"description": "MCP response"}}
+                }
+            },
+            "/message/send": {
+                "post": {
+                    "summary": "A2A message/send endpoint",
+                    "operationId": "a2a_message_send",
+                    "description": "A2A Protocol endpoint for multi-agent pipelines.",
+                    "responses": {"200": {"description": "A2A response"}}
+                }
+            }
+        }
+    }
+
+
 # ── ANP Agent Description — Agent Network Protocol discovery ──
 # Publishes TrustBoost capabilities in ANP/JSON-LD format.
 # Crawleable by any ANP-aware agent at /.well-known/agent-description.json
