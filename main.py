@@ -63,7 +63,7 @@ PAID_QUOTA            = int(os.getenv("PAID_QUOTA", "10000"))
 REQUIRED_PAYMENT_USDC = int(os.getenv("REQUIRED_PAYMENT_USDC", "149"))
 
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-app = FastAPI(title="TrustBoost PII Sanitizer v2.6.0")
+app = FastAPI(title="TrustBoost PII Sanitizer v2.6.0", openapi_url=None)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
