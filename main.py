@@ -2781,3 +2781,49 @@ async def preflight():
         "uptime_url": "https://api.trustboost.dev/health",
         "agent_card": "https://api.trustboost.dev/.well-known/agent-card.json"
     })
+
+
+@app.get("/.well-known/x402.json", include_in_schema=False)
+async def x402_well_known():
+    """x402 standard discovery endpoint — agents look here before initiating payment."""
+    from fastapi.responses import JSONResponse
+    return JSONResponse({
+        "x402Version": 2,
+        "accepts": [
+            {
+                "scheme": "exact",
+                "network": "solana",
+                "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+                "decimals": 6,
+                "amount": "149000000",
+                "payTo": "giu4VciTkfWJNG1oeP6SzHEJwmabikJSMB91GaFNWE4",
+                "maxTimeoutSeconds": 300,
+                "extra": {
+                    "name": "USD Coin",
+                    "symbol": "USDC"
+                }
+            }
+        ],
+        "resource": {
+            "url": "https://api.trustboost.dev/sanitize",
+            "description": "PII sanitization with Proof of Sanitization on Solana",
+            "mimeType": "application/json"
+        },
+        "service": {
+            "name": "TrustBoost PII Sanitizer",
+            "version": "2.6.0",
+            "description": "Sanitize PII from text before it reaches LLMs. 8 languages, 5 context modes, EU AI Act compliant.",
+            "trial": "tx_hash=TRIAL for 50 free sanitizations",
+            "quota": "149 USDC = 10,000 sanitizations",
+            "proof": "Proof of Sanitization anchored on Solana via Helius",
+            "verify": "https://api.trustboost.dev/verify/{anchor_tx}",
+            "preflight": "https://api.trustboost.dev/preflight",
+            "policy": "https://api.trustboost.dev/policy"
+        }
+    }, headers={"Access-Control-Allow-Origin": "*"})
+
+
+@app.get("/.well-known/x402", include_in_schema=False)
+async def x402_well_known_no_ext():
+    """Alias — some agents omit .json extension."""
+    return await x402_well_known()
