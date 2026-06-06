@@ -2763,6 +2763,8 @@ async def preflight():
             "network": "solana-mainnet",
             "unit": "10000 sanitizations",
             "price_per_call": 0.0149,
+            "price_per_unit": "0.0149 USDC per sanitization",
+            "bundle_description": "149 USDC = 10,000 sanitizations (~$0.0149 each)",
             "trial_available": True,
             "trial_quota": 50,
             "trial_key": "TRIAL"
