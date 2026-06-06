@@ -2785,7 +2785,7 @@ async def preflight():
     })
 
 
-@app.get("/.well-known/x402.json", include_in_schema=False)
+@app.api_route("/.well-known/x402.json", methods=["GET", "HEAD"], include_in_schema=False)
 async def x402_well_known():
     """x402 standard discovery endpoint — agents look here before initiating payment."""
     from fastapi.responses import JSONResponse
@@ -2825,7 +2825,7 @@ async def x402_well_known():
     }, headers={"Access-Control-Allow-Origin": "*"})
 
 
-@app.get("/.well-known/x402", include_in_schema=False)
+@app.api_route("/.well-known/x402", methods=["GET", "HEAD"], include_in_schema=False)
 async def x402_well_known_no_ext():
     """Alias — some agents omit .json extension."""
     return await x402_well_known()
