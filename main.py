@@ -2832,6 +2832,16 @@ async def x402_well_known_no_ext():
 
 
 @app.post("/trustboost-pii-sanitizer", include_in_schema=False)
-async def trustboost_skill_alias(request: SanitizeRequest):
+async def trustboost_skill_alias(request: Request):
     """Alias for /sanitize — captures agents calling by ClawHub skill name."""
-    return await sanitize_text(request)
+    from fastapi import Request
+    body = await request.json()
+    from fastapi.responses import JSONResponse
+    import httpx
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            "http://localhost:10000/sanitize",
+            json=body,
+            timeout=60
+        )
+        return JSONResponse(content=resp.json(), status_code=resp.status_code)
