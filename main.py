@@ -2829,3 +2829,9 @@ async def x402_well_known():
 async def x402_well_known_no_ext():
     """Alias — some agents omit .json extension."""
     return await x402_well_known()
+
+
+@app.post("/trustboost-pii-sanitizer", include_in_schema=False)
+async def trustboost_skill_alias(request: SanitizeRequest):
+    """Alias for /sanitize — captures agents calling by ClawHub skill name."""
+    return await sanitize_text(request)
