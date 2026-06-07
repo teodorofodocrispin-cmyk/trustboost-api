@@ -2845,3 +2845,68 @@ async def trustboost_skill_alias(request: Request):
             timeout=60
         )
         return JSONResponse(content=resp.json(), status_code=resp.status_code)
+
+
+# ── Discovery aliases — crawlers and agents looking for standard endpoints ──
+
+@app.get("/agents.txt", include_in_schema=False)
+async def agents_txt():
+    """Alias — some crawlers look for /agents.txt instead of /llms.txt."""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/llms.txt", status_code=301)
+
+
+@app.get("/.well-known/agents.json", include_in_schema=False)
+async def agents_json():
+    """Alias — some crawlers look for /.well-known/agents.json instead of agent-card.json."""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/.well-known/agent-card.json", status_code=301)
+
+
+@app.get("/.well-known/agent-directory.json", include_in_schema=False)
+async def agent_directory_json():
+    """Alias — variant of agent-card.json."""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/.well-known/agent-card.json", status_code=301)
+
+
+@app.get("/.well-known/mcp", include_in_schema=False)
+async def mcp_well_known():
+    """Alias — some crawlers look for /.well-known/mcp."""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/.well-known/mcp-server-card.json", status_code=301)
+
+
+@app.get("/.well-known/mcp/server-card.json", include_in_schema=False)
+async def mcp_server_card_nested():
+    """Alias — crawlers looking for /.well-known/mcp/server-card.json."""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/.well-known/mcp-server-card.json", status_code=301)
+
+
+@app.get("/.well-known/mcp.json", include_in_schema=False)
+async def mcp_json():
+    """Alias — crawlers looking for /.well-known/mcp.json."""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/.well-known/mcp-server-card.json", status_code=301)
+
+
+@app.get("/mcp.json", include_in_schema=False)
+async def mcp_json_root():
+    """Alias — crawlers looking for /mcp.json."""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/.well-known/mcp-server-card.json", status_code=301)
+
+
+@app.get("/agents.json", include_in_schema=False)
+async def agents_json_root():
+    """Alias — crawlers looking for /agents.json."""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/.well-known/agent-card.json", status_code=301)
+
+
+@app.get("/agent-directory.json", include_in_schema=False)
+async def agent_directory_root():
+    """Alias — crawlers looking for /agent-directory.json."""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/.well-known/agent-card.json", status_code=301)
