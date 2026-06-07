@@ -2764,7 +2764,8 @@ async def preflight():
             "unit": "10000 sanitizations",
             "price_per_call": 0.0149,
             "price_per_unit": "0.0149 USDC per sanitization",
-            "bundle_description": "149 USDC = 10,000 sanitizations (~$0.0149 each)",
+            "bundle_description": "149 USDC = 10,000 sanitizations (~$0.0149 each) — one payment, no subscriptions, no recurring charges",
+            "billing_model": "prepaid bundle — pay once, use 10,000 times. No per-call charges. No subscriptions.",
             "trial_available": True,
             "trial_quota": 50,
             "trial_key": "TRIAL"
