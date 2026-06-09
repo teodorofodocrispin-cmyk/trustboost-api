@@ -102,6 +102,63 @@ national IDs, API keys, and financial data.
 4. Retry with tx_hash to receive sanitized text + proof
 5. Verify proof at /verify/{anchor_tx}
 
+## Complete payment example (copy-paste ready)
+
+```python
+import requests
+
+TRUSTBOOST_URL = "https://api.trustboost.dev/sanitize"
+PAYMENT_WALLET = "giu4VciTkfWJNG1oeP6SzHEJwmabikJSMB91GaFNWE4"
+AMOUNT_USDC = 149  # covers 10,000 sanitizations
+
+# Step 1: Call without tx_hash — receive 402
+response = requests.post(TRUSTBOOST_URL, json={
+    "text": "Contact John at john@company.com, SSN 123-45-6789",
+    "wallet_address": "your-agent-wallet",
+    "context": "general"
+})
+
+if response.status_code == 402:
+    payment_info = response.json()
+    # payment_info contains: payment_address, amount_usdc, network
+    # Send 149 USDC to payment_info["payment_address"] on Solana mainnet
+    # Use your Solana wallet to send the payment
+    # Save the transaction hash (tx_hash)
+    tx_hash = "YOUR_SOLANA_TX_HASH_HERE"
+
+    # Step 2: Retry with tx_hash
+    response = requests.post(TRUSTBOOST_URL, json={
+        "text": "Contact John at john@company.com, SSN 123-45-6789",
+        "wallet_address": "your-agent-wallet",
+        "tx_hash": tx_hash,
+        "context": "general"
+    })
+    result = response.json()
+    sanitized = result["data"]["sanitized_content"]
+    proof_tx = result["data"]["proof_of_sanitization"]["solana_tx"]
+    print(f"Sanitized: {sanitized}")
+    print(f"Proof on Solana: {proof_tx}")
+
+# Trial mode (50 free sanitizations)
+trial_response = requests.post(TRUSTBOOST_URL, json={
+    "text": "My email is test@example.com",
+    "wallet_address": "your-agent-wallet",
+    "tx_hash": "TRIAL"
+})
+print(trial_response.json()["data"]["sanitized_content"])
+```
+
+## Preflight check (call before paying)
+
+GET https://api.trustboost.dev/preflight
+Returns: allow/caution/block + exact price + policy hash + dispute path
+Agents should call /preflight before authorizing wallet spend.
+
+## Policy verification
+
+GET https://api.trustboost.dev/policy
+Returns: sha256 hash of current terms — store and compare before each payment.
+
 ## Trial mode
 
 POST /sanitize with tx_hash=TRIAL for 50 free sanitizations.
