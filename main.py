@@ -2968,3 +2968,48 @@ async def agent_directory_root():
     """Alias — crawlers looking for /agent-directory.json."""
     from fastapi.responses import RedirectResponse
     return RedirectResponse(url="/.well-known/agent-card.json", status_code=301)
+
+
+# ── Visual assets and Glama discovery ─────────────────────────────────────────
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    """Favicon redirect — marketplace crawlers look for this."""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(
+        url="https://github.com/user-attachments/assets/5ac2a5c4-9ad3-410d-abaa-788527bd4f73",
+        status_code=301
+    )
+
+@app.get("/logo.png", include_in_schema=False)
+@app.get("/logo.svg", include_in_schema=False)
+@app.get("/assets/logo.png", include_in_schema=False)
+@app.get("/static/logo.png", include_in_schema=False)
+@app.get("/images/logo.svg", include_in_schema=False)
+@app.get("/static/logo.svg", include_in_schema=False)
+@app.get("/assets/logo.svg", include_in_schema=False)
+@app.get("/icon.png", include_in_schema=False)
+@app.get("/icon.svg", include_in_schema=False)
+async def logo():
+    """Logo redirect — marketplace crawlers look for these paths."""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(
+        url="https://github.com/user-attachments/assets/5ac2a5c4-9ad3-410d-abaa-788527bd4f73",
+        status_code=301
+    )
+
+@app.get("/.well-known/glama.json", include_in_schema=False)
+async def glama_well_known():
+    """Glama MCP discovery endpoint."""
+    from fastapi.responses import JSONResponse
+    return JSONResponse({
+        "name": "TrustBoost PII Sanitizer",
+        "description": "Privacy firewall for autonomous AI agent pipelines. Sanitizes PII before text reaches LLMs.",
+        "version": "2.6.0",
+        "url": "https://api.trustboost.dev/mcp",
+        "transport": "http",
+        "logo": "https://github.com/user-attachments/assets/5ac2a5c4-9ad3-410d-abaa-788527bd4f73",
+        "categories": ["security", "privacy", "compliance", "ai"],
+        "license": "MIT",
+        "repository": "https://github.com/teodorofodocrispin-cmyk/trustboost-api"
+    })
