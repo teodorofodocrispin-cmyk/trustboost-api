@@ -3013,3 +3013,9 @@ async def glama_well_known():
         "license": "MIT",
         "repository": "https://github.com/teodorofodocrispin-cmyk/trustboost-api"
     })
+
+
+@app.get("/.well-known/402index-verify.txt", include_in_schema=False)
+async def wellknown_402index_verify():
+    from fastapi.responses import PlainTextResponse
+    return PlainTextResponse("26a55286d352afc8eabc687b61dd3bcc46823eb9fa1cddc7642c8ec42d23aaee")
