@@ -1392,7 +1392,7 @@ X402_PAYMENT_INFO = {
     "accepts": [
         {
             "scheme": "exact",
-            "network": "solana",
+            "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
             "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
             "amount": "149000000",
             "decimals": 6,
@@ -1400,7 +1400,7 @@ X402_PAYMENT_INFO = {
             "maxTimeoutSeconds": 300,
             "extra": {
                 "name": "USD Coin",
-                "symbol": "USDC"
+                "decimals": 6
             }
         }
     ],
@@ -2852,7 +2852,7 @@ async def x402_well_known():
         "accepts": [
             {
                 "scheme": "exact",
-                "network": "solana",
+                "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
                 "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
                 "decimals": 6,
                 "amount": "149000000",
