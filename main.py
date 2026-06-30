@@ -63,6 +63,8 @@ PAID_QUOTA            = int(os.getenv("PAID_QUOTA", "10000"))
 REQUIRED_PAYMENT_USDC = int(os.getenv("REQUIRED_PAYMENT_USDC", "149"))
 PRICE_SANITIZE_PERCALL = os.getenv("PRICE_SANITIZE_PERCALL", "0.01")  # pay-per-call entry point (USDC)
 PAYAI_FACILITATOR_URL  = os.getenv("PAYAI_FACILITATOR_URL", "https://facilitator.payai.network")
+WALLET_BASE             = os.getenv("WALLET_BASE", "0xCf1d31020A7915421f6d66B9835Dcb6f422337E7")  # shared wallet, same as VeraData/Intelica
+USDC_BASE_CONTRACT      = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 app = FastAPI(title="TrustBoost PII Sanitizer v2.6.0", openapi_url=None)
@@ -1403,7 +1405,9 @@ USDC_SOLANA_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 
 async def verify_payment_percall(x_payment: str, price_usdc: str = None) -> tuple[bool, str]:
     """
-    Verify a single x402 payment via PayAI facilitator (Solana mainnet).
+    Verify a single x402 payment via PayAI facilitator.
+    Supports both Base mainnet and Solana mainnet — detects network from the
+    client's payment_payload and verifies against the matching requirements.
     Returns (is_valid, payer_wallet_address).
     Does not touch the existing TRIAL/prepaid-quota system.
     """
@@ -1419,44 +1423,66 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None) -> tupl
         print(f"TrustBoost: failed to decode payment token: {e}")
         return False, ""
 
-    requirements = {
-        "scheme": "exact",
-        "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
-        "amount": amount,
-        "asset": USDC_SOLANA_MINT,
-        "payTo": PAYMENT_WALLET,
-        "maxTimeoutSeconds": 300,
-        "extra": {"name": "USD Coin", "decimals": 6},
-    }
-    full_payload = {**payment_payload, "accepted": requirements}
-    verify_body = {
-        "x402Version": 2,
-        "paymentPayload": full_payload,
-        "paymentRequirements": requirements,
+    # Detect which network the client signed for
+    client_network = payment_payload.get("network", "")
+
+    NETWORK_CONFIGS = {
+        "eip155:8453": {
+            "asset": USDC_BASE_CONTRACT,
+            "payTo": WALLET_BASE,
+            "extra": {"name": "USD Coin", "version": "2"},
+        },
+        "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp": {
+            "asset": USDC_SOLANA_MINT,
+            "payTo": PAYMENT_WALLET,
+            "extra": {"name": "USD Coin", "decimals": 6},
+        },
     }
 
-    try:
-        async with _httpx_pc.AsyncClient(timeout=8.0) as client:
-            resp = await client.post(
-                f"{PAYAI_FACILITATOR_URL}/verify",
-                json=verify_body,
-                headers={"Content-Type": "application/json"},
-            )
-        if resp.status_code == 200 and resp.json().get("isValid", False):
-            payer = payment_payload.get("payload", {}).get("authorization", {}).get("from", "")
-            # settle
-            try:
-                async with _httpx_pc.AsyncClient(timeout=10.0) as sc:
-                    await sc.post(
-                        f"{PAYAI_FACILITATOR_URL}/settle",
-                        json=verify_body,
-                        headers={"Content-Type": "application/json"},
-                    )
-            except Exception as se:
-                print(f"TrustBoost settle error (non-fatal): {se}")
-            return True, payer
-    except Exception as e:
-        print(f"TrustBoost verify error: {e}")
+    # If client specified a known network, verify only that one.
+    # Otherwise (legacy clients), try Solana first (original default), then Base.
+    networks_to_try = [client_network] if client_network in NETWORK_CONFIGS else list(NETWORK_CONFIGS.keys())
+
+    for network in networks_to_try:
+        cfg = NETWORK_CONFIGS[network]
+        requirements = {
+            "scheme": "exact",
+            "network": network,
+            "amount": amount,
+            "asset": cfg["asset"],
+            "payTo": cfg["payTo"],
+            "maxTimeoutSeconds": 300,
+            "extra": cfg["extra"],
+        }
+        full_payload = {**payment_payload, "accepted": requirements}
+        verify_body = {
+            "x402Version": 2,
+            "paymentPayload": full_payload,
+            "paymentRequirements": requirements,
+        }
+
+        try:
+            async with _httpx_pc.AsyncClient(timeout=8.0) as client:
+                resp = await client.post(
+                    f"{PAYAI_FACILITATOR_URL}/verify",
+                    json=verify_body,
+                    headers={"Content-Type": "application/json"},
+                )
+            if resp.status_code == 200 and resp.json().get("isValid", False):
+                payer = payment_payload.get("payload", {}).get("authorization", {}).get("from", "")
+                try:
+                    async with _httpx_pc.AsyncClient(timeout=10.0) as sc:
+                        await sc.post(
+                            f"{PAYAI_FACILITATOR_URL}/settle",
+                            json=verify_body,
+                            headers={"Content-Type": "application/json"},
+                        )
+                except Exception as se:
+                    print(f"TrustBoost settle error (non-fatal): {se}")
+                return True, payer
+        except Exception as e:
+            print(f"TrustBoost verify error on {network}: {e}")
+            continue
 
     return False, ""
 
@@ -1502,6 +1528,19 @@ X402_PAYMENT_INFO = {
     "accepts": [
         {
             "scheme": "exact",
+            "network": "eip155:8453",
+            "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+            "amount": "10000",
+            "payTo": "0xCf1d31020A7915421f6d66B9835Dcb6f422337E7",
+            "maxTimeoutSeconds": 300,
+            "extra": {
+                "name": "USD Coin",
+                "version": "2",
+                "description": "Pay-per-call: 1 sanitization, $0.01 USDC on Base. Verified via PayAI facilitator — autonomous agents pay and retry automatically."
+            }
+        },
+        {
+            "scheme": "exact",
             "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
             "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
             "amount": "10000",
@@ -1511,7 +1550,7 @@ X402_PAYMENT_INFO = {
             "extra": {
                 "name": "USD Coin",
                 "decimals": 6,
-                "description": "Pay-per-call: 1 sanitization, $0.01 USDC. Verified via PayAI facilitator — autonomous agents pay and retry automatically."
+                "description": "Pay-per-call: 1 sanitization, $0.01 USDC on Solana. Verified via PayAI facilitator — autonomous agents pay and retry automatically."
             }
         },
         {
