@@ -1462,12 +1462,14 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None) -> tupl
         }
 
         try:
+            print(f"TrustBoost DEBUG: trying network={network}, verify_body={json.dumps(verify_body, default=str)[:800]}")
             async with _httpx_pc.AsyncClient(timeout=8.0) as client:
                 resp = await client.post(
                     f"{PAYAI_FACILITATOR_URL}/verify",
                     json=verify_body,
                     headers={"Content-Type": "application/json"},
                 )
+            print(f"TrustBoost DEBUG: network={network} status={resp.status_code} body={resp.text[:500]}")
             if resp.status_code == 200 and resp.json().get("isValid", False):
                 payer = payment_payload.get("payload", {}).get("authorization", {}).get("from", "")
                 try:
