@@ -134,3 +134,34 @@ USDC_SOLANA_MINT        = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 - [ ] README.md y llms.txt todavía no mencionan la opción pay-per-call — actualizar
       documentación pública
 - [ ] Decidir si hacer el repo privado, siguiendo el mismo criterio que VeraData
+
+---
+
+## Incidente — Jun 30, 2026 — Suspensión por límite gratuito Render
+
+### Qué pasó
+
+Mismo día de la migración a pay-per-call x402, TrustBoost (corriendo en plan gratuito de Render,
+compartiendo límite de horas con VeraData) fue suspendido:
+
+```
+"Free usage limit reached. Your service is now suspended until the next billing period."
+```
+
+### Fix
+
+Actualizado a Render **Starter ($7/mes)** preventivamente, mismo día que VeraData. Verificado
+operativo de nuevo con `agentcash:check_endpoint_schema` — las tres opciones de pago (Base $0.01,
+Solana $0.01, paquete $149) respondiendo correctamente en `paymentOptions[]`.
+
+### Estado final de plan Render — los tres productos
+
+| Producto | Plan a Jun 30 |
+|---|---|
+| Intelica | Starter (ya estaba antes) |
+| VeraData | Starter (actualizado tras suspensión real) |
+| TrustBoost | Starter (actualizado preventivamente) |
+
+Los tres productos ahora protegidos contra spin-down e interrupciones por límite gratuito —
+crítico considerando que el mismo día se validó tráfico orgánico real evaluando integración
+(agente `104.131.41.96` en VeraData recorriendo el catálogo completo repetidamente).
