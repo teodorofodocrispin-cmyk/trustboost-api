@@ -1454,7 +1454,13 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None) -> tupl
             "maxTimeoutSeconds": 300,
             "extra": cfg["extra"],
         }
-        full_payload = {**payment_payload, "accepted": requirements}
+        # Strip any "extensions" (e.g. bazaar) the client may have echoed back from
+        # the 402 discovery response — PayAI's /verify strictly validates extension
+        # shape (requires "type": "http" etc.) and rejects malformed echoes.
+        # Extensions belong in discovery responses, not in payment verification.
+        clean_payment_payload = {k: v for k, v in payment_payload.items() if k != "extensions"}
+
+        full_payload = {**clean_payment_payload, "accepted": requirements}
         verify_body = {
             "x402Version": 2,
             "paymentPayload": full_payload,
@@ -1462,14 +1468,12 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None) -> tupl
         }
 
         try:
-            print(f"TrustBoost DEBUG: trying network={network}, verify_body={json.dumps(verify_body, default=str)[:800]}")
             async with _httpx_pc.AsyncClient(timeout=8.0) as client:
                 resp = await client.post(
                     f"{PAYAI_FACILITATOR_URL}/verify",
                     json=verify_body,
                     headers={"Content-Type": "application/json"},
                 )
-            print(f"TrustBoost DEBUG: network={network} status={resp.status_code} body={resp.text[:500]}")
             if resp.status_code == 200 and resp.json().get("isValid", False):
                 payer = payment_payload.get("payload", {}).get("authorization", {}).get("from", "")
                 try:
