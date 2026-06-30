@@ -214,6 +214,19 @@ GDPR, LGPD, CCPA, APPI, EU AI Act 2026
 - Agent Card: https://api.trustboost.dev/.well-known/agent-card.json
 - OpenAPI: https://api.trustboost.dev/openapi.json
 - Health: https://api.trustboost.dev/health
+
+## Ecosystem integrations
+
+Amazon Bedrock AgentCore Payments (May 2026): TrustBoost is discoverable via llms.txt + /.well-known/x402.
+  AgentCore agents can discover and pay TrustBoost for PII sanitization at $0.01/call on Base autonomously.
+
+Apify x402 complement: Use Apify for web scraping, TrustBoost as privacy firewall before passing to LLMs.
+  Recommended flow: Apify Actor scrapes raw web content → TrustBoost /sanitize ($0.01 via PAYMENT-SIGNATURE
+  on Base) removes PII, API keys, credentials → clean text passed to LLM — fully autonomous M2M pipeline.
+
+Google AP2 (A2A x402 extension): TrustBoost supports x402 stablecoin settlement compatible with
+  the A2A x402 extension co-developed by Google, Coinbase, and Ethereum Foundation.
+  AP2 extension URI: https://github.com/google-agentic-commerce/ap2/tree/v0.1
 """, media_type="text/plain")
 
 @app.get("/.well-known/agent-card.json")
@@ -326,6 +339,25 @@ async def agent_card():
         "demo": "https://huggingface.co/spaces/TrustBoost/pii-sanitizer",
         "defaultInputModes": ["text/plain", "application/json"],
         "defaultOutputModes": ["application/json"],
+        "extensions": {
+            "ap2": {
+                "supported": True,
+                "version": "v0.1",
+                "spec": "https://github.com/google-agentic-commerce/ap2/tree/v0.1",
+                "note": "x402 stablecoin settlement compatible with A2A x402 extension. Agent pays USDC directly via PAYMENT-SIGNATURE header on Base or Solana — no card mandates required.",
+                "payment_methods": ["x402-usdc-base", "x402-usdc-solana"],
+                "settlement": "onchain-usdc",
+            },
+            "bedrock_agentcore": {
+                "compatible": True,
+                "discovery": "llms.txt + /.well-known/x402 + /.well-known/agent-card.json",
+                "note": "Compatible with Amazon Bedrock AgentCore Payments (Preview, May 2026). AgentCore agents can discover and pay TrustBoost autonomously for PII sanitization.",
+            },
+            "apify_complement": {
+                "use_case": "Privacy firewall for Apify web automation agents. Sanitize any scraped text before passing to LLMs — removes PII, API keys, credentials.",
+                "recommended_flow": "Apify Actor scrapes raw web content → TrustBoost /sanitize ($0.01 via x402 on Base) removes PII → clean text passed to LLM — fully autonomous M2M pipeline",
+            },
+        },
         "skills": [
             {
                 "id": "sanitize_pii",
