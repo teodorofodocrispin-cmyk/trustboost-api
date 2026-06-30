@@ -5,9 +5,9 @@ import hashlib
 import base58
 from typing import Optional, List, Literal
 import httpx
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -61,6 +61,8 @@ PAYMENT_WALLET        = os.getenv("PAYMENT_WALLET")
 TRIAL_QUOTA           = int(os.getenv("TRIAL_QUOTA", "50"))
 PAID_QUOTA            = int(os.getenv("PAID_QUOTA", "10000"))
 REQUIRED_PAYMENT_USDC = int(os.getenv("REQUIRED_PAYMENT_USDC", "149"))
+PRICE_SANITIZE_PERCALL = os.getenv("PRICE_SANITIZE_PERCALL", "0.01")  # pay-per-call entry point (USDC)
+PAYAI_FACILITATOR_URL  = os.getenv("PAYAI_FACILITATOR_URL", "https://facilitator.payai.network")
 
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 app = FastAPI(title="TrustBoost PII Sanitizer v2.6.0", openapi_url=None)
@@ -1387,9 +1389,131 @@ async def verify_proof(anchor_tx: str):
 # containing all the information the agent needs to pay
 # autonomously and retry — no human intervention required.
 
+# ─── Pay-Per-Call x402 Verification (standard verify/settle flow) ─────────────
+# This is the LOW-FRICTION entry point for autonomous agents — standard x402 v2
+# verify/settle via PayAI facilitator, accepting both PAYMENT-SIGNATURE (v2) and
+# X-PAYMENT (v1 legacy) headers. Coexists with the existing TRIAL and prepaid
+# 149 USDC quota system below — this does NOT replace them.
+
+import base64 as _b64_pc
+import httpx as _httpx_pc
+
+USDC_SOLANA_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+
+
+async def verify_payment_percall(x_payment: str, price_usdc: str = None) -> tuple[bool, str]:
+    """
+    Verify a single x402 payment via PayAI facilitator (Solana mainnet).
+    Returns (is_valid, payer_wallet_address).
+    Does not touch the existing TRIAL/prepaid-quota system.
+    """
+    if not x_payment:
+        return False, ""
+
+    price = price_usdc or PRICE_SANITIZE_PERCALL
+    amount = str(int(float(price) * 1_000_000))
+
+    try:
+        payment_payload = json.loads(_b64_pc.b64decode(x_payment).decode("utf-8"))
+    except Exception as e:
+        print(f"TrustBoost: failed to decode payment token: {e}")
+        return False, ""
+
+    requirements = {
+        "scheme": "exact",
+        "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        "amount": amount,
+        "asset": USDC_SOLANA_MINT,
+        "payTo": PAYMENT_WALLET,
+        "maxTimeoutSeconds": 300,
+        "extra": {"name": "USD Coin", "decimals": 6},
+    }
+    full_payload = {**payment_payload, "accepted": requirements}
+    verify_body = {
+        "x402Version": 2,
+        "paymentPayload": full_payload,
+        "paymentRequirements": requirements,
+    }
+
+    try:
+        async with _httpx_pc.AsyncClient(timeout=8.0) as client:
+            resp = await client.post(
+                f"{PAYAI_FACILITATOR_URL}/verify",
+                json=verify_body,
+                headers={"Content-Type": "application/json"},
+            )
+        if resp.status_code == 200 and resp.json().get("isValid", False):
+            payer = payment_payload.get("payload", {}).get("authorization", {}).get("from", "")
+            # settle
+            try:
+                async with _httpx_pc.AsyncClient(timeout=10.0) as sc:
+                    await sc.post(
+                        f"{PAYAI_FACILITATOR_URL}/settle",
+                        json=verify_body,
+                        headers={"Content-Type": "application/json"},
+                    )
+            except Exception as se:
+                print(f"TrustBoost settle error (non-fatal): {se}")
+            return True, payer
+    except Exception as e:
+        print(f"TrustBoost verify error: {e}")
+
+    return False, ""
+
+
+def build_percall_402(resource_url: str, price_usdc: str) -> Response:
+    """Build a standard x402 v2 402 response for the pay-per-call entry point."""
+    price_micro = str(int(float(price_usdc) * 1_000_000))
+    accepts = [{
+        "scheme": "exact",
+        "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        "amount": price_micro,
+        "maxTimeoutSeconds": 300,
+        "payTo": PAYMENT_WALLET,
+        "asset": USDC_SOLANA_MINT,
+        "extra": {"name": "USD Coin", "decimals": 6},
+    }]
+    header_payload = {
+        "x402Version": 2,
+        "resource": {"url": resource_url, "description": "PII sanitization — pay-per-call entry point", "mimeType": "application/json"},
+        "accepts": accepts,
+        "error": "Payment required",
+    }
+    body_payload = {
+        **header_payload,
+        "payment_flow": [
+            "1. Decode base64 PAYMENT-REQUIRED header",
+            "2. Sign Solana USDC transfer authorization",
+            "3. Retry with header PAYMENT-SIGNATURE: <base64-encoded-signature> (preferred)",
+            "   or X-PAYMENT: <base64-encoded-signature> (legacy, also accepted)",
+        ],
+        "note": "For high-volume usage (10,000+ calls), see /sanitize quota-based pricing (149 USDC prepaid).",
+    }
+    header_b64 = _b64_pc.b64encode(json.dumps(header_payload, separators=(",", ":")).encode()).decode()
+    return Response(
+        content=json.dumps(body_payload),
+        status_code=402,
+        headers={"PAYMENT-REQUIRED": header_b64, "Content-Type": "application/json"},
+    )
+
+
 X402_PAYMENT_INFO = {
     "x402Version": 2,
     "accepts": [
+        {
+            "scheme": "exact",
+            "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+            "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+            "amount": "10000",
+            "decimals": 6,
+            "payTo": "giu4VciTkfWJNG1oeP6SzHEJwmabikJSMB91GaFNWE4",
+            "maxTimeoutSeconds": 300,
+            "extra": {
+                "name": "USD Coin",
+                "decimals": 6,
+                "description": "Pay-per-call: 1 sanitization, $0.01 USDC. Verified via PayAI facilitator — autonomous agents pay and retry automatically."
+            }
+        },
         {
             "scheme": "exact",
             "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
@@ -1400,7 +1524,8 @@ X402_PAYMENT_INFO = {
             "maxTimeoutSeconds": 300,
             "extra": {
                 "name": "USD Coin",
-                "decimals": 6
+                "decimals": 6,
+                "description": "High-volume package: 10,000 sanitizations, $149 USDC prepaid. Send manually, use resulting tx_hash. Best for sustained high-frequency usage."
             }
         }
     ],
@@ -1465,7 +1590,7 @@ async def validation_exception_handler(request: Request, exc):
             status_code=402,
             content={
                 "status": "payment_required",
-                "message": "Payment required. Use tx_hash=TRIAL for 50 free sanitizations, or send 149 USDC on Solana mainnet.",
+                "message": "Payment required. Options: X-PAYMENT/PAYMENT-SIGNATURE header with $0.01 USDC per call (standard x402, auto-payable), tx_hash=TRIAL for 50 free sanitizations, or send 149 USDC on Solana mainnet for 10,000 calls.",
                 "x402": X402_PAYMENT_INFO,
                 "quick_start": {
                     "trial": {"tx_hash": "TRIAL", "wallet_address": "your-agent-id", "quota": 50, "cost": 0},
@@ -1495,7 +1620,7 @@ async def sanitize_discovery(request: Request):
         status_code=402,
         content={
             "status": "payment_required",
-            "message": "Payment required. Use tx_hash=TRIAL for 50 free sanitizations, or send 149 USDC on Solana mainnet.",
+            "message": "Payment required. Options: X-PAYMENT/PAYMENT-SIGNATURE header with $0.01 USDC per call (standard x402, auto-payable), tx_hash=TRIAL for 50 free sanitizations, or send 149 USDC on Solana mainnet for 10,000 calls.",
             "x402": X402_PAYMENT_INFO
         },
         headers={
@@ -1510,7 +1635,28 @@ async def sanitize_discovery(request: Request):
 
 
 @app.post("/sanitize")
-async def sanitize(req: SanitizeRequest, request: Request):
+async def sanitize(
+    req: SanitizeRequest,
+    request: Request,
+    x_payment: Optional[str] = Header(default=None, alias="X-PAYMENT"),
+    payment_signature: Optional[str] = Header(default=None, alias="PAYMENT-SIGNATURE"),
+):
+    x_payment = payment_signature or x_payment  # prefer x402 v2 PAYMENT-SIGNATURE, fallback to legacy X-PAYMENT
+
+    # ── Pay-per-call entry point (standard x402 verify/settle) ────────────────
+    # If the agent sent a PAYMENT-SIGNATURE/X-PAYMENT header, verify it as a
+    # single per-call payment via PayAI facilitator. This is independent of
+    # the TRIAL/tx_hash/prepaid-quota system below — both paths coexist.
+    percall_payer = None
+    if x_payment and (not req.text or not req.text.strip()):
+        # Payment header present but no text yet — this is a probe/discovery call,
+        # not an actual payment attempt. Fall through to normal 402 flow below.
+        pass
+    elif x_payment:
+        _valid, percall_payer = await verify_payment_percall(x_payment, PRICE_SANITIZE_PERCALL)
+        if not _valid:
+            return JSONResponse(status_code=402, content={"status": "payment_verification_failed", "message": "x402 payment could not be verified."})
+        # Payment verified — skip TRIAL/tx_hash checks entirely, proceed straight to sanitization
 
     # Validación básica
     # Si no hay texto y no hay tx_hash → responder 402 para x402 discovery
@@ -1521,7 +1667,7 @@ async def sanitize(req: SanitizeRequest, request: Request):
                 status_code=402,
                 content={
                     "status": "payment_required",
-                    "message": "Payment required. Use tx_hash=TRIAL for 50 free sanitizations, or send 149 USDC on Solana mainnet.",
+                    "message": "Payment required. Options: X-PAYMENT/PAYMENT-SIGNATURE header with $0.01 USDC per call (standard x402, auto-payable), tx_hash=TRIAL for 50 free sanitizations, or send 149 USDC on Solana mainnet for 10,000 calls.",
                     "x402": X402_PAYMENT_INFO,
                     "quick_start": {
                         "trial": {"tx_hash": "TRIAL", "wallet_address": "your-agent-id", "quota": 50, "cost": 0},
@@ -1574,18 +1720,19 @@ async def sanitize(req: SanitizeRequest, request: Request):
     if context not in VALID_CONTEXTS:
         context = "general"  # fallback silencioso — no rompe clientes existentes
 
-    wallet = req.wallet_address or "anonymous"
+    wallet = percall_payer or req.wallet_address or "anonymous"
 
     # ── x402 Payment Protocol ─────────────────────────────
     # If no tx_hash provided → return 402 with payment info
     # This allows autonomous agents to discover payment terms
     # and pay without human intervention (x402 standard)
-    if not req.tx_hash or req.tx_hash.strip() == "":
+    # Skip this whole tx_hash/quota check if pay-per-call already verified the request.
+    if not percall_payer and (not req.tx_hash or req.tx_hash.strip() == ""):
         return JSONResponse(
             status_code=402,
             content={
                 "status": "payment_required",
-                "message": "Payment required. Use tx_hash=TRIAL for 50 free sanitizations, or send 149 USDC on Solana mainnet.",
+                "message": "Payment required. Options: X-PAYMENT/PAYMENT-SIGNATURE header with $0.01 USDC per call (standard x402, auto-payable), tx_hash=TRIAL for 50 free sanitizations, or send 149 USDC on Solana mainnet for 10,000 calls.",
                 "x402": X402_PAYMENT_INFO,
                 "quick_start": {
                     "trial": {
@@ -2792,7 +2939,7 @@ curl -X POST https://api.trustboost.dev/sanitize/preview \\
 async def policy():
     """Policy hash — allows agents to verify terms haven't changed since evaluation."""
     import hashlib, httpx
-    from fastapi.responses import JSONResponse
+    from fastapi.responses import JSONResponse, Response
     policy_text = "TrustBoost PII Sanitizer v2.6.0 — MIT License. Raw input never stored. Sanitized output logged 90 days. Payment: 149 USDC Solana = 10,000 sanitizations. No refunds on consumed quota. Dispute: teodorofodocrispin@gmail.com. GDPR/LGPD/EU-AI-Act compliant. Source: github.com/teodorofodocrispin-cmyk/trustboost-api"
     policy_hash = hashlib.sha256(policy_text.encode()).hexdigest()
     return JSONResponse({
@@ -2808,7 +2955,7 @@ async def policy():
 @app.get("/preflight", include_in_schema=False)
 async def preflight():
     """Buyer-agent preflight check — returns allow/caution/block + service readiness."""
-    from fastapi.responses import JSONResponse
+    from fastapi.responses import JSONResponse, Response
     return JSONResponse({
         "preflight": "allow",
         "service": "TrustBoost PII Sanitizer",
@@ -2846,7 +2993,7 @@ async def preflight():
 @app.api_route("/.well-known/x402.json", methods=["GET", "HEAD"], include_in_schema=False)
 async def x402_well_known():
     """x402 standard discovery endpoint — agents look here before initiating payment."""
-    from fastapi.responses import JSONResponse
+    from fastapi.responses import JSONResponse, Response
     return JSONResponse({
         "x402Version": 2,
         "accepts": [
@@ -2894,7 +3041,7 @@ async def trustboost_skill_alias(request: Request):
     """Alias for /sanitize — captures agents calling by ClawHub skill name."""
     from fastapi import Request
     body = await request.json()
-    from fastapi.responses import JSONResponse
+    from fastapi.responses import JSONResponse, Response
     import httpx
     async with httpx.AsyncClient() as client:
         resp = await client.post(
@@ -3001,7 +3148,7 @@ async def logo():
 @app.get("/.well-known/glama.json", include_in_schema=False)
 async def glama_well_known():
     """Glama MCP discovery endpoint."""
-    from fastapi.responses import JSONResponse
+    from fastapi.responses import JSONResponse, Response
     return JSONResponse({
         "name": "TrustBoost PII Sanitizer",
         "description": "Privacy firewall for autonomous AI agent pipelines. Sanitizes PII before text reaches LLMs.",
