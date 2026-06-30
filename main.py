@@ -1831,8 +1831,14 @@ async def sanitize(
             }
         )
 
+    # ── Modo pay-per-call (already verified above) ────────
+    # Skip TRIAL/quota/prepaid logic entirely — payment already confirmed via PayAI.
+    if percall_payer:
+        quota_remaining = None
+        license_type = "Pay-per-call (x402)"
+
     # ── Modo TRIAL ─────────────────────────────────────────
-    if req.tx_hash.upper() == "TRIAL":
+    elif req.tx_hash.upper() == "TRIAL":
         used = await get_trial_count(wallet)
         if used >= TRIAL_QUOTA:
             return JSONResponse(
