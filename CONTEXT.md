@@ -165,3 +165,39 @@ Solana $0.01, paquete $149) respondiendo correctamente en `paymentOptions[]`.
 Los tres productos ahora protegidos contra spin-down e interrupciones por límite gratuito —
 crítico considerando que el mismo día se validó tráfico orgánico real evaluando integración
 (agente `104.131.41.96` en VeraData recorriendo el catálogo completo repetidamente).
+
+
+---
+
+## Session — Jul 1, 2026 — Ecosystem integrations (AP2 + Bedrock + Apify)
+
+### Investigación x402 — contexto del ecosistema
+
+**Apify lanzó x402 hoy (Jul 1, 2026)**
+De 2,000 → 20,000+ Actores disponibles en x402. El MCP server de Apify usa `PAYMENT-SIGNATURE`
+por defecto. Caso de uso natural con Intelica: Apify scrapes competitor websites → Intelica /intel
+analiza competitive positioning → IMI score + moat_strength + agent_recommendation, autónomo.
+
+**Amazon Bedrock AgentCore Payments (Preview, mayo 2026)**
+Agentes AWS ya descubren Intelica orgánicamente via llms.txt + openapi.json (tráfico real en logs).
+
+### Implementaciones
+
+**`/mcp-server-card.json` — campo `extensions` (ya existía, confirmado v4.5.8):**
+- AP2 v0.1 compatible con A2A x402 extension de Google
+- Bedrock AgentCore Payments compatible
+- Apify complement: Apify scrapes → TrustBoost /sanitize ($0.01 Base) removes PII → clean text to LLM
+
+**`llms.txt` — nueva sección `## Ecosystem integrations`:**
+- Referencia explícita a Bedrock AgentCore, Apify x402, Google AP2
+
+### Outreach pendiente — Apify
+
+Mismo outreach que VeraData: contactar Štěpán Škopek y Jakub Kopecký de Apify
+para mencionar TrustBoost como privacy firewall complementario a su scraping — elimina PII antes de pasar texto a LLMs.
+
+### Validaciones hoy
+
+- Pago real agentcash $0.01 Base ✅ (sanitize PII: email + nombre + teléfono redactados)
+- 4 bugs corregidos en cadena: header, red, extensión bazaar en verify, crash NoneType en quota
+- Modelo híbrido: pay-per-call $0.01 (Base/Solana) + prepago $149/10k calls coexisten
