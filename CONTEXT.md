@@ -204,43 +204,149 @@ para mencionar TrustBoost como privacy firewall complementario a su scraping —
 
 ---
 
-## Session Jul 1, 2026
+## Session — Jul 10, 2026 — 4 fixes aditivos v2.7 (headers 402, /sanitize/quick, EU AI Act)
 
-**Builder:** Claude (claude.ai) + Iv (teodorofodocrispin-cmyk)
-**Objetivo:** Outreach ecosistema x402, posicionamiento ERC-8299, conexion con babyblueviper1.
+### Contexto de esta sesión
 
-### Conexion con babyblueviper1 (ERC-8299/WYRIWE)
+Trabajo hecho fuera del repo, en una sesión de Cowork sin push access — el sandbox no tiene
+salida de red hacia la API de GitHub (`raw.githubusercontent.com` sí es alcanzable para lectura
+en repos públicos, `api.github.com` para escritura no). El repo sigue siendo público, así que
+`README.md` y `main.py` se leyeron sin autenticación. **No se aplicó nada directamente al repo**
+— se entregaron como patch (`trustboost_v2.7.patch`) + doc de instrucciones
+(`trustboost_fixes_v2.7.md`) con diffs buscar/reemplazar exactos, listos para aplicar y commitear
+manualmente. Los 4 fixes juntos se verificaron con `py_compile` sobre el `main.py` real completo
+— compilan sin errores de sintaxis.
 
-TrustBoost aparece mencionado en el issue #2749 (x402-foundation/x402) como capa complementaria:
-- Pipeline documentado: TrustBoost /sanitize ($0.01) -> VeraData /sanctions ($0.05) -> KYB ($0.08)
-- `sanitization_spec_cid` de TrustBoost mapea al campo `raw_input_hash` en el L4 leg de ERC-8299
-- Cuando babyblueviper1 implemente `/review` para `sanctions_screening`, TrustBoost es la capa de PII previa
+**Nota operativa de seguridad:** el token de GitHub (`repo+workflow`, scope amplio) se pegó en
+texto plano en el chat, como se ha venido haciendo en sesiones anteriores para dar continuidad.
+Quedó registrado en el historial de la conversación — tratar como comprometido. Recomendado:
+rotar y reemplazar por un fine-grained token limitado a `trustboost-api`, o conectar GitHub vía
+un connector/MCP para no tener que re-pegar credenciales en cada chat nuevo.
 
-### Outreach activo
+### Fix 1 — Separar headers 402 por método de pago
 
-- **LinkedIn Naimat Ullah/Velos Systems:** Integracion TrustBoost + Layer-4 TCP_RST — engagement tecnico mas sustantivo para TrustBoost
-- **LinkedIn Ravi Shankar NRK:** Pregunta sofisticada sobre GDPR erasure vs SHA-256 — recomendacion publica recibida
-- **LinkedIn Gabriel Akanbi:** Preguntas tecnicas sobre context preservation y audit trail
-- **LinkedIn Ash Masoha:** Valido el problema de PII en pipelines de agentes
+Antes: los 4 sitios que devuelven 402 (`validation_exception_handler`, `GET /sanitize` discovery,
+y 2 ramas de `POST /sanitize`) usaban siempre los mismos headers `X-402-*`, hardcodeados al
+bundle Solana/149 — un agente que solo quería pagar $0.01 por llamada no podía distinguir esa
+opción sin parsear el body JSON completo.
 
-### Distribucion confirmada
+Fix: nuevo dict `X402_METHOD_HEADERS` (definido junto a `X402_PAYMENT_INFO`) agregado vía
+`**X402_METHOD_HEADERS` en los 4 sitios — no reemplaza ningún header `X-402-*` existente, solo
+suma:
 
-- punkpeye/awesome-mcp-servers (Security section) — merged
-- xpaysh/awesome-x402 PR #409 — abierto
-- x402-list.com — registrado
-- Atelier marketplace (agent_id: ext_1780325737728_ovnyx8xul) — activo
-- 402 Index — verificado
-- Primer pago real per-call de agente externo: $0.01 Base, wallet `0xe4Ae...` — validado
+```python
+X402_METHOD_HEADERS = {
+    "X-402-PerCall-Network": "eip155:8453",
+    "X-402-PerCall-Currency": "USDC",
+    "X-402-PerCall-Amount": PRICE_SANITIZE_PERCALL,
+    "X-402-PerCall-Address": WALLET_BASE,
+    "X-402-PerCall-Network-Alt": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+    "X-402-PerCall-Address-Alt": PAYMENT_WALLET,
+    "X-402-Bundle-Network": "solana-mainnet",
+    "X-402-Bundle-Currency": "USDC",
+    "X-402-Bundle-Amount": str(REQUIRED_PAYMENT_USDC),
+    "X-402-Bundle-Address": PAYMENT_WALLET,
+}
+```
 
-### Estado tecnico
+También se extendió `expose_headers` en el middleware CORS con los nuevos nombres — si no,
+agentes corriendo en browser no podrían leerlos.
 
-- Modelo hibrido: pay-per-call $0.01 USDC (Base/Solana via x402 v2) + prepago $149/10k calls (legacy)
-- F1 = 1.000 en 34 test cases, 8 idiomas
-- PAYMENT-SIGNATURE (x402 v2) activo en todos los endpoints
-- EU AI Act enforcement Aug 2, 2026 — 32 dias — convierte TrustBoost de opcional a requerimiento de compliance
+### Fix 2 — Endpoint `/sanitize/quick`
 
-### Proximos pasos
+Nuevo endpoint, **solo** x402 v2 pay-per-call — sin TRIAL, sin tx_hash, sin bundle. Resuelve el
+pendiente de la sesión 001 ("`build_percall_402` no usado actualmente"): ahora sí se usa, como
+respuesta 402 de este endpoint cuando falta texto o falta el header de pago. Reutiliza
+`verify_payment_percall`, `gpt_sanitize`, `enforce_redaction`, `compute_score`, `log_audit` sin
+modificar ninguno — cero cambios al core de sanitización.
 
-1. Actualizar README/llms.txt con opcion pay-per-call claramente documentada
-2. Evaluar tabla de auditoria para pagos per-call (trazabilidad completa)
-3. Seguimiento con Naimat Ullah/Velos Systems para integracion concreta Layer-4 + TrustBoost
+Diseño deliberado: **no** aplica `check_budget` (Fase 2, privacy budget) — es el entry point
+sin fricción para M2M puro. Pendiente evaluar si debería respetarlo (ver Pendientes).
+
+Los pagos per-call por `/sanitize/quick` se registran en la misma tabla `audit_log` vía
+`log_audit()`, con `request_id` sintético `percall:<wallet>:<timestamp>` — no se creó tabla nueva
+(resuelve parcialmente el pendiente de sesión 001 sobre auditoría de pagos per-call, usando la
+tabla existente en lugar de una nueva).
+
+### Fix 3 — `verify_payment_percall()` y headers de pago
+
+Verificado, sin cambios de código necesarios: ya acepta tanto `PAYMENT-SIGNATURE` (v2, preferido)
+como `X-PAYMENT` (v1 legacy) desde la sesión 001 — confirmado en el handler de `POST /sanitize`
+(`x_payment = payment_signature or x_payment`) y heredado automáticamente por `/sanitize/quick`
+al usar el mismo patrón de aliasing de headers.
+
+### Fix 4 — `eu_ai_act` + `sanitization_hash` en la respuesta
+
+Agregados al dict `data` de `POST /sanitize` y de `/sanitize/quick`, sin remover ni renombrar
+ningún campo existente:
+
+```python
+"sanitization_hash": hashlib.sha256(f"{req.text}|{sanitized}|{score}|{redaction_source}".encode()).hexdigest(),
+"eu_ai_act": {
+    "compliant_articles": ["Art. 4", "Art. 13"],
+    "description": "PII detectada y redactada server-side antes de exponer el contenido a un LLM downstream; entidades y hash de la operación quedan en el audit trail.",
+    "audit_id": audit_id,
+},
+```
+
+`hashlib` ya estaba importado globalmente — sin imports nuevos.
+
+### Estado del modelo de pago tras esta sesión
+
+Las 3 vías de pago (TRIAL, prepago $149 Solana, pay-per-call $0.01) siguen siendo exactamente
+las mismas — este trabajo no cambió el modelo de negocio, solo:
+1. Hizo el método pay-per-call "de primera clase" (headers propios + endpoint propio), en vez de
+   compartir headers ambiguos con el bundle.
+2. Agregó metadata de cumplimiento verificable (hash + referencia EU AI Act) a toda sanitización
+   exitosa, en cualquiera de las 3 vías de pago.
+
+### Continuación — mismo día, misma sesión — pytest real + 2 fixes más
+
+Se retomó la lista de pendientes de abajo. Para correr los tests de verdad hizo falta traer
+el `main.py` **completo** — el fetch normal trunca en ~98K caracteres y el archivo real pesa
+143,333 caracteres (146,254 bytes según la API de GitHub). Se resolvió navegando a la URL
+raw en un tab de Chrome y usando `fetch()` desde la consola del navegador (el sandbox de
+bash tiene bloqueado `raw.githubusercontent.com` y `api.github.com` por allowlist de proxy —
+solo la herramienta de fetch normal y el navegador real llegan).
+
+**Verificación real ejecutada** (no solo `py_compile`):
+- `pytest tests/test_sanitize.py -v` (archivo de test real del repo) → **18/18 passed**
+  contra el `main.py` parcheado.
+- Chequeo de colisión de nombres contra el archivo completo (no la porción truncada):
+  ningún nombre nuevo (`QuickSanitizeRequest`, `X402_METHOD_HEADERS`, `sanitize_quick`,
+  `sanitization_hash`, etc.) existía antes — 0 colisiones. Los 4 anchors de los diffs
+  confirmados únicos contra el archivo completo también.
+- `TestClient` de FastAPI contra `/sanitize/quick`: sin texto → 402, con texto sin pago →
+  402 (`build_percall_402`), con `PAYMENT-SIGNATURE` inválido → 402
+  `payment_verification_failed` sin tocar OpenAI/Supabase. `GET /llms.txt` → 200, contiene
+  `/sanitize/quick` y `PAYMENT-SIGNATURE`.
+
+**Fix 5 (heredado de sesión 001, Bug 3) — `"type": "http"` en `extensions.bazaar`**
+Capa defensiva agregada en `X402_PAYMENT_INFO["extensions"]["bazaar"]`. El fix real que ya
+funciona sigue siendo `clean_payment_payload` en `verify_payment_percall` (no reenviar
+`extensions` al verify) — esto es un extra para clientes de terceros que no hagan ese
+stripping. **No validado contra PayAI en vivo**, es la mejor hipótesis según el mensaje de
+error original de esa sesión.
+
+**Fix 6 (nuevo) — `llms.txt` no mencionaba pay-per-call**
+`README.md` sí documentaba el flujo x402 pay-per-call; `llms.txt` (generado en runtime desde
+`main.py`, no es archivo estático) seguía describiendo solo el bundle de 149 USDC — es lo
+primero que un agente lee para descubrir cómo pagar. Se actualizaron las secciones
+`## Autonomous payment flow`, `## Endpoints` y `## Payment` para incluir pay-per-call y
+`/sanitize/quick`. También se redactó una adición sugerida para `README.md`
+(`readme_addition_sanitize_quick.md`, archivo aparte).
+
+### Pendiente próxima sesión
+
+- [ ] Aplicar `trustboost_v2.7.patch` (ahora con 6 fixes) al repo real y desplegar
+- [ ] Probar `/sanitize/quick` end-to-end con un pago real (mismo patrón de validación que
+      sesión 001 con `agentcash`) — requiere el deploy anterior
+- [ ] Validar en vivo si el `"type": "http"` del Fix 5 realmente es lo que PayAI espera, o
+      si el nombre/ubicación del campo es otro
+- [ ] **Decisión pendiente:** ¿`/sanitize/quick` debe respetar `check_budget` (privacy
+      budget por agente) o mantenerse deliberadamente sin fricción?
+- [ ] **Decisión pendiente:** ¿hacer el repo privado, siguiendo el mismo criterio que
+      VeraData?
+- [ ] Rotar el token de GitHub pegado en el chat y decidir mecanismo de acceso permanente
+      (fine-grained token o connector/MCP) para futuras sesiones
+- [ ] Aplicar la adición sugerida a `README.md` (`readme_addition_sanitize_quick.md`)
