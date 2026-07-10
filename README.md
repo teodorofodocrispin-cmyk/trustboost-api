@@ -37,6 +37,26 @@ Ready for more? See [Trial mode](#trial) below — 50 free sanitizations with a 
 
 ---
 
+## Pay-per-call — /sanitize/quick (recommended for M2M agents)
+
+The lightest-weight entry point for autonomous agents: pay $0.01 USDC per call,
+no TRIAL, no tx_hash, no prepaid bundle.
+
+```bash
+curl -X POST https://api.trustboost.dev/sanitize/quick \
+  -H "Content-Type: application/json" \
+  -H "PAYMENT-SIGNATURE: <base64-encoded x402 v2 signature>" \
+  -d '{"text": "Contact John at john@company.com, SSN 123-45-6789"}'
+```
+
+- Networks: Base (`eip155:8453`, preferred) or Solana (`solana:5eykt4...`) — auto-detected
+- Verified + settled via [PayAI facilitator](https://facilitator.payai.network)
+- `X-PAYMENT` header also accepted (x402 v1, legacy)
+- No text or no payment header yet? Returns a standard x402 v2 402 with payment instructions
+- For 10,000+ calls, the [prepaid bundle](#quick-start) (149 USDC) is cheaper per call
+
+---
+
 ## MCP Server — Claude, Cursor & Windsurf native integration
 
 TrustBoost is available as an MCP (Model Context Protocol) server.
