@@ -74,7 +74,12 @@ app.add_middleware(
     allow_credentials=False,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization", "X-Payment", "X-402-Payment", "payment-signature", "x-payment"],
-    expose_headers=["X-402-Payment", "X-402-Network", "X-402-Currency", "X-402-Amount", "X-402-Address", "X-402-Trial"],
+    expose_headers=[
+        "X-402-Payment", "X-402-Network", "X-402-Currency", "X-402-Amount", "X-402-Address", "X-402-Trial",
+        "X-402-PerCall-Network", "X-402-PerCall-Currency", "X-402-PerCall-Amount", "X-402-PerCall-Address",
+        "X-402-PerCall-Network-Alt", "X-402-PerCall-Address-Alt",
+        "X-402-Bundle-Network", "X-402-Bundle-Currency", "X-402-Bundle-Amount", "X-402-Bundle-Address",
+    ],
 )
 
 from demo_router import router as demo_router
@@ -100,6 +105,18 @@ national IDs, API keys, and financial data.
 
 ## Autonomous payment flow (x402)
 
+Two ways to pay autonomously — pick based on your agent's needs:
+
+**Pay-per-call (recommended for most agents, v2.7+)**
+1. POST /sanitize/quick with your text and a PAYMENT-SIGNATURE header
+   (X-PAYMENT also accepted, legacy v1)
+2. No header yet? You get HTTP 402 with x402 v2 payment instructions
+   (Base preferred, $0.01 USDC, Solana as alternate network)
+3. Sign, retry with the header — verified + settled automatically via
+   PayAI facilitator, no human intervention, no quota bookkeeping
+4. Same endpoint also works on /sanitize (coexists with tx_hash/TRIAL below)
+
+**Prepaid bundle (149 USDC / 10,000 calls, for high-volume clients)**
 1. POST /sanitize without tx_hash
 2. Receive HTTP 402 with USDC payment instructions
 3. Pay 149 USDC on Solana mainnet autonomously
@@ -170,7 +187,8 @@ No wallet required for /demo (3 requests per hour).
 
 ## Endpoints
 
-- POST /sanitize — sanitize PII (main endpoint)
+- POST /sanitize — sanitize PII (main endpoint, TRIAL/bundle/pay-per-call)
+- POST /sanitize/quick — pay-per-call ONLY, x402 v2, $0.01 USDC, no TRIAL/tx_hash
 - POST /redact — alias for /sanitize
 - POST /demo — free preview 3/hour
 - POST /detect — alias for /demo
@@ -195,9 +213,12 @@ general, legal, financial, medical, code
 ## Payment
 
 - Trial: tx_hash=TRIAL, 50 free per wallet
-- Paid: 149 USDC on solana-mainnet
-- Address: giu4VciTkfWJNG1oeP6SzHEJwmabikJSMB91GaFNWE4
-- Protocol: x402 (HTTP 402 Payment Required)
+- Pay-per-call: $0.01 USDC per sanitization, Base (preferred) or Solana,
+  header PAYMENT-SIGNATURE (or X-PAYMENT legacy), verified via PayAI
+  facilitator — use POST /sanitize/quick or POST /sanitize
+- Bundle: 149 USDC on solana-mainnet, 10,000 calls, tx_hash-based
+- Address (bundle): giu4VciTkfWJNG1oeP6SzHEJwmabikJSMB91GaFNWE4
+- Protocol: x402 (HTTP 402 Payment Required), x402 v2 verify/settle for pay-per-call
 
 ## Proof of Sanitization
 
@@ -1613,6 +1634,15 @@ X402_PAYMENT_INFO = {
     },
     "extensions": {
         "bazaar": {
+            # v2.7 (aditivo) — pendiente de sesion 001 (Bug 3): PayAI valida
+            # estrictamente el shape de CUALQUIER extension presente en el
+            # payload de verify. El fix real (que ya funciona) es no reenviar
+            # "extensions" al verificar (ver clean_payment_payload en
+            # verify_payment_percall). Este "type": "http" es una capa
+            # defensiva adicional para clientes de terceros que no hagan ese
+            # stripping y le peguen a /verify con el bazaar completo tal como
+            # se los devolvimos aqui en el discovery.
+            "type": "http",
             "info": {
                 "name": "TrustBoost PII Sanitizer",
                 "description": "Sanitize PII from text before it reaches LLMs. Detects emails, phone numbers, national IDs, API keys, and financial data across 8 languages. Returns sanitized_content, safety_score, and risk_category.",
@@ -1656,6 +1686,19 @@ X402_PAYMENT_INFO = {
     }
 }
 
+X402_METHOD_HEADERS = {
+    "X-402-PerCall-Network": "eip155:8453",
+    "X-402-PerCall-Currency": "USDC",
+    "X-402-PerCall-Amount": PRICE_SANITIZE_PERCALL,
+    "X-402-PerCall-Address": WALLET_BASE,
+    "X-402-PerCall-Network-Alt": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+    "X-402-PerCall-Address-Alt": PAYMENT_WALLET,
+    "X-402-Bundle-Network": "solana-mainnet",
+    "X-402-Bundle-Currency": "USDC",
+    "X-402-Bundle-Amount": str(REQUIRED_PAYMENT_USDC),
+    "X-402-Bundle-Address": PAYMENT_WALLET,
+}
+
 @app.exception_handler(422)
 async def validation_exception_handler(request: Request, exc):
     """Return 402 instead of 422 when /sanitize receives no body.
@@ -1680,7 +1723,8 @@ async def validation_exception_handler(request: Request, exc):
                 "X-402-Currency": "USDC",
                 "X-402-Amount": "149",
                 "X-402-Address": PAYMENT_WALLET,
-                "PAYMENT-REQUIRED": base64.b64encode(json.dumps(X402_PAYMENT_INFO).encode()).decode()
+                "PAYMENT-REQUIRED": base64.b64encode(json.dumps(X402_PAYMENT_INFO).encode()).decode(),
+                **X402_METHOD_HEADERS,
             }
         )
     from fastapi.exception_handlers import request_validation_exception_handler
@@ -1706,7 +1750,8 @@ async def sanitize_discovery(request: Request):
             "X-402-Currency": "USDC",
             "X-402-Amount": "149",
             "X-402-Address": PAYMENT_WALLET,
-            "PAYMENT-REQUIRED": base64.b64encode(_json.dumps(X402_PAYMENT_INFO).encode()).decode()
+            "PAYMENT-REQUIRED": base64.b64encode(_json.dumps(X402_PAYMENT_INFO).encode()).decode(),
+            **X402_METHOD_HEADERS,
         }
     )
 
@@ -1757,7 +1802,8 @@ async def sanitize(
                     "X-402-Currency": "USDC",
                     "X-402-Amount": "149",
                     "X-402-Address": PAYMENT_WALLET,
-                    "PAYMENT-REQUIRED": base64.b64encode(_json.dumps(X402_PAYMENT_INFO).encode()).decode()
+                    "PAYMENT-REQUIRED": base64.b64encode(_json.dumps(X402_PAYMENT_INFO).encode()).decode(),
+                    **X402_METHOD_HEADERS,
                 }
             )
         return JSONResponse(status_code=200, content={"status": "empty_input"})
@@ -1833,7 +1879,8 @@ async def sanitize(
                 "X-402-Amount": "149",
                 "X-402-Address": PAYMENT_WALLET,
                 "X-402-Trial": "tx_hash=TRIAL for 50 free sanitizations",
-                "PAYMENT-REQUIRED": __import__("base64").b64encode(__import__("json").dumps(X402_PAYMENT_INFO).encode()).decode()
+                "PAYMENT-REQUIRED": __import__("base64").b64encode(__import__("json").dumps(X402_PAYMENT_INFO).encode()).decode(),
+                **X402_METHOD_HEADERS,
             }
         )
 
@@ -2056,6 +2103,10 @@ async def sanitize(
         except Exception as e:
             print(f"[Anchor] Non-critical error: {e}")
 
+    sanitization_hash = hashlib.sha256(
+        f"{req.text}|{sanitized}|{score}|{redaction_source}".encode()
+    ).hexdigest()
+
     data = {
         "message": "Content successfully sanitized and logged.",
         "sanitized_content": sanitized,
@@ -2069,6 +2120,12 @@ async def sanitize(
         "usage_metrics": {
             "quota_remaining": quota_remaining,
             "quota_limit": PAID_QUOTA if license_type != "TRIAL" else TRIAL_QUOTA,
+        },
+        "sanitization_hash": sanitization_hash,
+        "eu_ai_act": {
+            "compliant_articles": ["Art. 4", "Art. 13"],
+            "description": "PII detectada y redactada server-side antes de exponer el contenido a un LLM downstream; entidades y hash de la operacion quedan en el audit trail.",
+            "audit_id": audit_id,
         },
     }
     if solana_anchor:
@@ -2092,6 +2149,129 @@ async def sanitize(
             "request_id": req.tx_hash,
             "data": data,
             "billing": {"license_type": license_type, "status": "active"},
+        },
+    )
+
+
+# ── v2.7 (aditivo): /sanitize/quick — x402 v2 pay-per-call UNICAMENTE ──────
+class QuickSanitizeRequest(BaseModel):
+    text: Optional[str] = None
+    context: str = "general"
+
+
+@app.post("/sanitize/quick")
+async def sanitize_quick(
+    req: QuickSanitizeRequest,
+    request: Request,
+    x_payment: Optional[str] = Header(default=None, alias="X-PAYMENT"),
+    payment_signature: Optional[str] = Header(default=None, alias="PAYMENT-SIGNATURE"),
+):
+    """POST /sanitize/quick — x402 v2 pay-per-call only ($0.01 USDC, Base
+    preferido, Solana alterno). No TRIAL, no tx_hash, no bundle prepago.
+    Reutiliza la misma logica de sanitizacion que /sanitize sin modificarla.
+    """
+    x_payment = payment_signature or x_payment
+
+    if not req.text or not req.text.strip():
+        return build_percall_402(str(request.url), PRICE_SANITIZE_PERCALL)
+
+    if not x_payment:
+        return build_percall_402(str(request.url), PRICE_SANITIZE_PERCALL)
+
+    valid, payer = await verify_payment_percall(x_payment, PRICE_SANITIZE_PERCALL)
+    if not valid:
+        return JSONResponse(status_code=402, content={
+            "status": "payment_verification_failed",
+            "message": "x402 payment could not be verified."
+        })
+
+    MAX_CHARS = 10000
+    if len(req.text) > MAX_CHARS:
+        return JSONResponse(status_code=413, content={
+            "status": "error",
+            "code": "TEXT_TOO_LONG",
+            "message": f"Text is {len(req.text):,} chars. Maximum is {MAX_CHARS:,} chars per request.",
+        })
+
+    context = req.context.lower().strip() if req.context else "general"
+    if context not in VALID_CONTEXTS:
+        context = "general"
+
+    result = await gpt_sanitize(req.text, context)
+    if result.get("status") == "empty_input":
+        return JSONResponse(status_code=200, content={"status": "empty_input"})
+
+    model_cleaned = result.get("cleaned_text", "") or ""
+    raw_entities = result.get("entities")
+    entities_list: list = []
+    if isinstance(raw_entities, list):
+        for ent in raw_entities:
+            if not isinstance(ent, dict):
+                continue
+            cat = (ent.get("category") or "").upper()
+            if cat not in RISK_WEIGHTS:
+                cat = "SENSITIVE"
+            entities_list.append({
+                "type": str(ent.get("type") or "unknown"),
+                "category": cat,
+                "redacted_text": str(ent.get("redacted_text") or ""),
+            })
+
+    is_failsafe = (
+        len(entities_list) == 1
+        and entities_list[0].get("type") == "sanitizer_failsafe"
+    )
+    if is_failsafe:
+        sanitized = model_cleaned or "[REDACTED]"
+        redaction_source = "fallback_full_redaction"
+        unmatched_entities: list = []
+    else:
+        sanitized, redaction_source, unmatched_entities = enforce_redaction(
+            original_text=req.text,
+            model_cleaned_text=model_cleaned,
+            entities=entities_list,
+        )
+
+    score, category = compute_score(entities_list)
+    entities_removed = len(entities_list) > 0
+
+    request_id = f"percall:{payer or 'unknown'}:{int(datetime.now(timezone.utc).timestamp())}"
+    audit_id = await log_audit(
+        request_id, len(req.text), sanitized, score, category,
+        payer or "anonymous", "Pay-per-call (x402-quick)", context
+    )
+
+    sanitization_hash = hashlib.sha256(
+        f"{req.text}|{sanitized}|{score}|{redaction_source}".encode()
+    ).hexdigest()
+
+    data = {
+        "message": "Content successfully sanitized.",
+        "sanitized_content": sanitized,
+        "safety_score": score,
+        "risk_category": category,
+        "entities_removed": entities_removed,
+        "entities": entities_list,
+        "redaction_source": redaction_source,
+        "context_applied": context,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "sanitization_hash": sanitization_hash,
+        "eu_ai_act": {
+            "compliant_articles": ["Art. 4", "Art. 13"],
+            "description": "PII detectada y redactada server-side antes de exponer el contenido a un LLM downstream; entidades y hash de la operacion quedan en el audit trail.",
+            "audit_id": audit_id,
+        },
+    }
+    if unmatched_entities:
+        data["unmatched_entities"] = unmatched_entities
+
+    return JSONResponse(
+        status_code=200,
+        content={
+            "status": "success",
+            "request_id": request_id,
+            "data": data,
+            "billing": {"license_type": "Pay-per-call (x402-quick)", "status": "active"},
         },
     )
 
