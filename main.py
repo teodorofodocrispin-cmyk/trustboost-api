@@ -63,6 +63,7 @@ PAID_QUOTA            = int(os.getenv("PAID_QUOTA", "10000"))
 REQUIRED_PAYMENT_USDC = int(os.getenv("REQUIRED_PAYMENT_USDC", "149"))
 PRICE_SANITIZE_PERCALL = os.getenv("PRICE_SANITIZE_PERCALL", "0.01")  # pay-per-call entry point (USDC)
 PAYAI_FACILITATOR_URL  = os.getenv("PAYAI_FACILITATOR_URL", "https://facilitator.payai.network")
+FLUXA_PROXY_SECRET     = os.getenv("FLUXA_PROXY_SECRET", "")  # aditivo: reconoce llamadas ya cobradas/liquidadas por FluxA Monetize
 WALLET_BASE             = os.getenv("WALLET_BASE", "0xCf1d31020A7915421f6d66B9835Dcb6f422337E7")  # shared wallet, same as VeraData/Intelica
 USDC_BASE_CONTRACT      = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 
@@ -2165,20 +2166,31 @@ async def sanitize_quick(
     request: Request,
     x_payment: Optional[str] = Header(default=None, alias="X-PAYMENT"),
     payment_signature: Optional[str] = Header(default=None, alias="PAYMENT-SIGNATURE"),
+    x_fluxa_secret: Optional[str] = Header(default=None, alias="X-FLUXA-SECRET"),
 ):
     """POST /sanitize/quick — x402 v2 pay-per-call only ($0.01 USDC, Base
     preferido, Solana alterno). No TRIAL, no tx_hash, no bundle prepago.
     Reutiliza la misma logica de sanitizacion que /sanitize sin modificarla.
+
+    Aditivo: si llega X-FLUXA-SECRET valido, la llamada viene del proxy de
+    FluxA Monetize, que ya cobro y liquido el pago USDC antes de reenviar
+    esta request (FluxA elimina el header X-Payment antes de reenviar).
+    En ese caso se omite la verificacion x402 propia para evitar un doble
+    cobro / 402 espurio.
     """
     x_payment = payment_signature or x_payment
+    is_fluxa_proxied = bool(FLUXA_PROXY_SECRET) and x_fluxa_secret == FLUXA_PROXY_SECRET
 
     if not req.text or not req.text.strip():
         return build_percall_402(str(request.url), PRICE_SANITIZE_PERCALL)
 
-    if not x_payment:
+    if not x_payment and not is_fluxa_proxied:
         return build_percall_402(str(request.url), PRICE_SANITIZE_PERCALL)
 
-    valid, payer = await verify_payment_percall(x_payment, PRICE_SANITIZE_PERCALL)
+    if is_fluxa_proxied:
+        valid, payer = True, "fluxa-proxy"
+    else:
+        valid, payer = await verify_payment_percall(x_payment, PRICE_SANITIZE_PERCALL)
     if not valid:
         return JSONResponse(status_code=402, content={
             "status": "payment_verification_failed",
@@ -2235,10 +2247,11 @@ async def sanitize_quick(
     score, category = compute_score(entities_list)
     entities_removed = len(entities_list) > 0
 
+    license_type = "Pay-per-call (FluxA Monetize)" if is_fluxa_proxied else "Pay-per-call (x402-quick)"
     request_id = f"percall:{payer or 'unknown'}:{int(datetime.now(timezone.utc).timestamp())}"
     audit_id = await log_audit(
         request_id, len(req.text), sanitized, score, category,
-        payer or "anonymous", "Pay-per-call (x402-quick)", context
+        payer or "anonymous", license_type, context
     )
 
     sanitization_hash = hashlib.sha256(
@@ -2271,7 +2284,7 @@ async def sanitize_quick(
             "status": "success",
             "request_id": request_id,
             "data": data,
-            "billing": {"license_type": "Pay-per-call (x402-quick)", "status": "active"},
+            "billing": {"license_type": license_type, "status": "active"},
         },
     )
 
