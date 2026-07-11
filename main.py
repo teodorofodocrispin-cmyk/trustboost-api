@@ -1527,12 +1527,18 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None) -> tupl
             _raw = _raw[len("x402 "):].strip()
         elif _raw.lower().startswith("x-"):
             _raw = _raw[2:].strip()
-        # Tolerant decode: drop any char that is not valid base64, then re-pad.
+        # Tolerant decode: drop anything that is not ASCII base64, then re-pad.
         import re as _re
         _b64_clean = _re.sub(r"[^A-Za-z0-9+/=]", "", _raw)
         _pad = (-len(_b64_clean)) % 4
         _b64_clean += "=" * _pad
-        payment_payload = json.loads(_b64_pc.b64decode(_b64_clean).decode("utf-8"))
+        _decoded = _b64_pc.b64decode(_b64_clean)
+        # Be resilient to stray non-UTF8 bytes (e.g. copy/paste artifacts)
+        try:
+            _json_str = _decoded.decode("utf-8")
+        except UnicodeDecodeError:
+            _json_str = _decoded.decode("latin-1", errors="ignore")
+        payment_payload = json.loads(_json_str)
     except Exception as e:
         print(f"TrustBoost: failed to decode payment token: {e}")
         return False, ""
