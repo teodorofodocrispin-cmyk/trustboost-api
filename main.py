@@ -1515,16 +1515,24 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None) -> tupl
     if not x_payment:
         return False, ""
 
+    # [DEBUG] log raw header to diagnose decode failures in prod
+    print(f"[DEBUG] x_payment raw (first 80): {repr((x_payment or '')[:80])}")
+
     price = price_usdc or PRICE_SANITIZE_PERCALL
     amount = str(int(float(price) * 1_000_000))
-
     try:
         _raw = x_payment.strip()
+        # Strip any x402 / x- scheme prefix (case-insensitive)
         if _raw.lower().startswith("x402 "):
             _raw = _raw[len("x402 "):].strip()
         elif _raw.lower().startswith("x-"):
             _raw = _raw[2:].strip()
-        payment_payload = json.loads(_b64_pc.b64decode(_raw).decode("utf-8"))
+        # Tolerant decode: drop any char that is not valid base64, then re-pad.
+        import re as _re
+        _b64_clean = _re.sub(r"[^A-Za-z0-9+/=]", "", _raw)
+        _pad = (-len(_b64_clean)) % 4
+        _b64_clean += "=" * _pad
+        payment_payload = json.loads(_b64_pc.b64decode(_b64_clean).decode("utf-8"))
     except Exception as e:
         print(f"TrustBoost: failed to decode payment token: {e}")
         return False, ""
