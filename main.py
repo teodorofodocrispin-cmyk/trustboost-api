@@ -1199,9 +1199,11 @@ async def helius_verify(tx_hash: str) -> tuple[bool, float]:
 # ADDITIVE: parallel Base prepaid path. Reuses x402_direct_verify (already
 # validated against real mainnet tx). No Solana/Helius logic touched.
 async def base_verify(tx_hash: str) -> tuple[bool, float]:
-    """Verify a 149 USDC (or pay-per-call) ERC-20 transfer to WALLET_BASE on Base.
+    """Verify a 149 USDC prepaid ERC-20 transfer to WALLET_BASE on Base.
     Mirrors helius_verify's contract: returns (is_valid, amount_usdc).
-    Falls back to False if the on-chain module is unavailable or RPC fails.
+    Additive prepaid path only — pay-per-call (0.01) is handled separately by
+    verify_payment_percall's on-chain branch. Falls back to False if the on-chain
+    module is unavailable or RPC fails.
     """
     try:
         import sys as _sys, os as _os
@@ -1212,9 +1214,6 @@ async def base_verify(tx_hash: str) -> tuple[bool, float]:
         envelope = {"transactionHash": tx_hash, "network": "eip155:8453"}
         ok, _payer = await _vmod.verify_onchain_direct(
             envelope, WALLET_BASE, int(REQUIRED_PAYMENT_USDC * 1_000_000), "eip155:8453")
-        if not ok:
-            ok, _payer = await _vmod.verify_onchain_direct(
-                envelope, WALLET_BASE, int(0.01 * 1_000_000), "eip155:8453")
         return bool(ok), float(REQUIRED_PAYMENT_USDC) if ok else 0.0
     except Exception as e:
         print(f"[base_verify] skipped: {type(e).__name__}: {str(e)[:80]}")
