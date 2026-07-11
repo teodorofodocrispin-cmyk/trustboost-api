@@ -403,6 +403,8 @@ Aplicado por Hermes Agent con token fine-grained read+write. Cambios 100% aditiv
 - Verificado: `py_compile` OK, import FastAPI OK en venv aislado, TestClient runtime 200 en rutas nuevas, deploy en Render OK.
 - Commit: `trustboost-api` main → `eaafb0a`.
 
+**Nota de ejecución:** Fase A aplicada DIRECTAMENTE en `main.py` y forzada a producción — no como borradores locales. `/pricing` se generó para TrustBoost (formato del `Intelica /pricing`). `llms.txt` enriquecido con cross-links mutuos. `agent-card.json` de TrustBoost ya existía (no se tocó). 100% aditivo, núcleo intacto.
+
 ### Fase C — directorios (forks propios de la org)
 TrustBoost pasó de estar ausente en 2 de 4 directorios a aparecer en todos, cohesionado con el stack:
 - `awesome-x402` → +TrustBoost + sección stack (push `4fe2833`).
