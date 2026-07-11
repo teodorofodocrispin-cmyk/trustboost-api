@@ -1858,6 +1858,15 @@ async def sanitize(
     # If the agent sent a PAYMENT-SIGNATURE/X-PAYMENT header, verify it as a
     # single per-call payment via PayAI facilitator. This is independent of
     # the TRIAL/tx_hash/prepaid-quota system below — both paths coexist.
+    # Robust header capture (case-insensitive; covers Cloudflare/proxy stripping
+    # non-standard headers like X-Payment). Fallback chain: FastAPI alias,
+    # then raw request.headers lookups.
+    if not x_payment:
+        x_payment = (
+            request.headers.get("x-payment")
+            or request.headers.get("x402-payment")
+            or request.headers.get("payment-signature")
+        )
     percall_payer = None
     if x_payment and (not req.text or not req.text.strip()):
         # Payment header present but no text yet — this is a probe/discovery call,
