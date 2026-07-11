@@ -1515,6 +1515,32 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None) -> tupl
         },
     }
 
+    # ── DIRECT ON-CHAIN VERIFY (additive; parallel to PayAI facilitator) ─────
+    # If the envelope carries a real on-chain transactionHash (an agent that paid
+    # USDC directly to our wallet), verify it against the chain RPC — no PayAI
+    # JWT required. Falls through to PayAI below if no tx_hash is present.
+    try:
+        import importlib.util as _ilu, os as _os
+        _spec = _ilu.spec_from_file_location(
+            "x402_direct_verify",
+            _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "x402_direct_verify.py"))
+        _mod = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_mod)
+        _vod = _mod.verify_onchain_direct
+        _tx = payment_payload.get("transactionHash") or payment_payload.get("tx_hash")
+        if _tx:
+            _networks = [client_network] if client_network in NETWORK_CONFIGS else list(NETWORK_CONFIGS.keys())
+            for _net in _networks:
+                _cfg = NETWORK_CONFIGS[_net]
+                _res = await _vod(payment_payload, _cfg["payTo"], int(amount), _net)
+                _ok = bool(_res[0]) if isinstance(_res, (tuple, list)) else False
+                _payer = _res[1] if isinstance(_res, (tuple, list)) and len(_res) > 1 else ""
+                if _ok:
+                    print(f"TrustBoost: payment verified via DIRECT on-chain ({_net}) tx={_tx[:12]}")
+                    return True, _payer
+    except Exception as _e:
+        print(f"TrustBoost: direct on-chain verify skipped: {type(_e).__name__}: {str(_e)[:80]}")
+
     # If client specified a known network, verify only that one.
     # Otherwise (legacy clients), try Solana first (original default), then Base.
     networks_to_try = [client_network] if client_network in NETWORK_CONFIGS else list(NETWORK_CONFIGS.keys())
