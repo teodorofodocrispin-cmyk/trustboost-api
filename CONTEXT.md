@@ -419,6 +419,9 @@ TrustBoost pasó de estar ausente en 2 de 4 directorios a aparecer en todos, coh
 ### Nota técnica (sesión Jul 11)
 Los fine-grained PAT — incluso con "All repositories" + `Issues: write` + `Pull requests: write` — **NO pueden comentar en repos de otros usuarios/orgs** (error 403 `addComment`). Para follow-ups en repos ajenos se requiere sesión web del navegador (cookie) o un classic PAT con `repo` scope. Los follow-ups de VeraData/Intelica se hicieron manualmente en navegador.
 
+### Demo Agent — referencia de adopción agentica (Jul 11)
+Se construyó `teodorofodocrispin-cmyk/agentic-commerce-stack-demo`: agente de referencia EXTERNO que descubre los 3 servicios vía `agent-card.json` + `/pricing`, firma x402 v2 y paga USDC on-chain en Base (Intelica + VeraData), encadenando `TrustBoost /sanitize` → `Intelica /intel` → `VeraData /sanctions`. TrustBoost cobra en Solana (payTo `giu4VciTkfWJNG1oeP6SzHEJwmabikJSMB91GaFNWE4`), así que el demo usó su modo trial (`tx_hash=TRIAL`). El servicio devuelve 402 en el paso final porque delega la verificación al facilitador PayAI, que requiere credenciales de producción para emitir el recibo. Esto demuestra adopción agentica real: un agente te descubre y te firma. El demo NO tiene acceso a los cores ni a Supabase.
+
 ### Reglas respetadas
 - main.py siempre aditivo; nunca romper flujo de sanitización/pagos.
 - Cores intactos: x402, sanitización on-chain, Helius, Supabase sin cambios.
