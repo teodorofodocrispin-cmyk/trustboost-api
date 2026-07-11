@@ -414,6 +414,9 @@ TrustBoost pasó de estar ausente en 2 de 4 directorios a aparecer en todos, coh
 ### PRs externos
 - `Merit-Systems/agentcash-skills` #17 es de Intelica (OPEN). TrustBoost no tiene PRs externos pendientes conocidos.
 
+### Nota técnica (sesión Jul 11)
+Los fine-grained PAT — incluso con "All repositories" + `Issues: write` + `Pull requests: write` — **NO pueden comentar en repos de otros usuarios/orgs** (error 403 `addComment`). Para follow-ups en repos ajenos se requiere sesión web del navegador (cookie) o un classic PAT con `repo` scope. Los follow-ups de VeraData/Intelica se hicieron manualmente en navegador.
+
 ### Reglas respetadas
 - main.py siempre aditivo; nunca romper flujo de sanitización/pagos.
 - Cores intactos: x402, sanitización on-chain, Helius, Supabase sin cambios.
