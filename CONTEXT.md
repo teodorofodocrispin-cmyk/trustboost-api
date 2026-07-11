@@ -350,3 +350,41 @@ primero que un agente lee para descubrir cómo pagar. Se actualizaron las seccio
 - [ ] Rotar el token de GitHub pegado en el chat y decidir mecanismo de acceso permanente
       (fine-grained token o connector/MCP) para futuras sesiones
 - [ ] Aplicar la adición sugerida a `README.md` (`readme_addition_sanitize_quick.md`)
+
+---
+
+## Nota — Jul 10, 2026: Integracion FluxA Monetize (bypass X-FLUXA-SECRET)
+
+### El problema
+
+FluxA Monetize (`monetize.fluxapay.xyz`) es un proxy: cobra el pago x402 al agente
+y reenvia una request "limpia" al backend, **eliminando el header de pago**
+(`X-Payment`) antes de reenviar. `/sanitize/quick` exigia ese header para no
+devolver 402 — cualquier trafico proxied por FluxA recibia 402 pese a que el
+agente ya habia pagado. Bloqueador descubierto y resuelto en esta sesion, antes
+de publicar el listing en el marketplace.
+
+### Fix aditivo
+
+- Constante `FLUXA_PROXY_SECRET` (env var en Render, vacia por defecto).
+- Nuevo header `X-FLUXA-SECRET` en `/sanitize/quick`. Si coincide con el valor
+  configurado, se omite `verify_payment_percall()` — `payer = "fluxa-proxy"`,
+  `license_type = "Pay-per-call (FluxA Monetize)"`.
+- Sin el secreto (o con uno incorrecto), comportamiento x402 identico al de
+  antes — cero cambios para cualquier otro agente.
+- No toca `gpt_sanitize`, `enforce_redaction`, ni `compute_score`.
+
+### Validado en produccion
+
+```
+Con X-FLUXA-SECRET correcto, sin pago -> 200 OK, PII redactada, payer=fluxa-proxy
+Sin secreto, sin pago                -> 402 (control, sin cambios)
+```
+
+### Configuracion FluxA Studio
+
+- Endpoint: `/sanitize/quick`, precio $0.01 USDC (coincide exacto con el precio
+  fijo del endpoint — sin margen de descalce).
+- Static Parameter -> Header: `X-FLUXA-SECRET` = (secreto, no documentado aqui).
+- El secreto especifico vive solo en Render (env var) y en el Static Parameter
+  de FluxA — nunca en este archivo ni en el codigo.
