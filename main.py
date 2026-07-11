@@ -1550,15 +1550,26 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None) -> tupl
 def build_percall_402(resource_url: str, price_usdc: str) -> Response:
     """Build a standard x402 v2 402 response for the pay-per-call entry point."""
     price_micro = str(int(float(price_usdc) * 1_000_000))
-    accepts = [{
-        "scheme": "exact",
-        "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
-        "amount": price_micro,
-        "maxTimeoutSeconds": 300,
-        "payTo": PAYMENT_WALLET,
-        "asset": USDC_SOLANA_MINT,
-        "extra": {"name": "USD Coin", "decimals": 6},
-    }]
+    accepts = [
+        {
+            "scheme": "exact",
+            "network": "eip155:8453",
+            "amount": price_micro,
+            "maxTimeoutSeconds": 300,
+            "payTo": WALLET_BASE,
+            "asset": USDC_BASE_CONTRACT,
+            "extra": {"name": "USD Coin", "version": "2"},
+        },
+        {
+            "scheme": "exact",
+            "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+            "amount": price_micro,
+            "maxTimeoutSeconds": 300,
+            "payTo": PAYMENT_WALLET,
+            "asset": USDC_SOLANA_MINT,
+            "extra": {"name": "USD Coin", "decimals": 6},
+        },
+    ]
     header_payload = {
         "x402Version": 2,
         "resource": {"url": resource_url, "description": "PII sanitization — pay-per-call entry point", "mimeType": "application/json"},
