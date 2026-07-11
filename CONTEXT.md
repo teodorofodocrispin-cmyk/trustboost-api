@@ -426,7 +426,8 @@ Se construyó `teodorofodocrispin-cmyk/agentic-commerce-stack-demo`: agente de r
 ADDITIVO, sin tocar Solana/Helius. Dos caminos de pago en Base ya equiparados con la verificación on-chain directa (sin facilitador):
 - **Micropago per-call 0.01 USDC vía header `X-Payment`**: `verify_payment_percall` ya tiene rampa on-chain (desde Opción 1+2) que verifica el `transactionHash` contra `WALLET_BASE` (`0xCf1d…37E7`) con monto 0.01 — devuelve 200 sin PayAI. Este es el camino del smoke test barato.
 - **Prepaid 149 USDC vía `tx_hash` en body**: `base_verify(tx_hash)` reutiliza `x402_direct_verify.verify_onchain_direct` (149-only, coherente con Solana). El handler `/sanitize` enruta por red: `tx_hash` `0x`+64hex → `base_verify` (Base); firma base58 → `helius_verify` (Solana). Un agente puede pagar 149 USDC en Base y reusar el `tx_hash` 10k veces, igual que en Solana.
-Verificado a nivel de módulo + enrutado (tx real de Intelica). Smoke test en vivo de micropago 0.01 (Base) y de prepaid 149 (Base) pendientes de tx reales (no gastados en pruebas). El proof on-chain inmutable sigue solo en Solana (anchor_proof_on_solana); un equivalente en Base (EAS) queda como fase 2 opcional.
+- **Bug hallado y corregido (smoke test en vivo)**: el header `X-Payment: x402 <b64>` llegaba con el prefijo `x402 ` y `verify_payment_percall` lo decodificaba sin quitarlo → `Incorrect padding` en logs de Render → 402. Fix: quitar prefijo `x402 `/`x-` antes de decodificar (igual que VeraData/Intelica). Confirmado con tx real `56fee92b…` (0.01 USDC a WALLET_BASE).
+Verificado a nivel de módulo + enrutado + decode (tx real de Intelica y de 0.01). Smoke test en vivo de micropago 0.01 (Base) pendiente de re-confirmar tras fix de decode. El proof on-chain inmutable sigue solo en Solana (anchor_proof_on_solana); un equivalente en Base (EAS) queda como fase 2 opcional.
 
 ### Reglas respetadas
 - main.py siempre aditivo; nunca romper flujo de sanitización/pagos.

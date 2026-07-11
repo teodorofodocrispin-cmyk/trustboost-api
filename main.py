@@ -1519,7 +1519,12 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None) -> tupl
     amount = str(int(float(price) * 1_000_000))
 
     try:
-        payment_payload = json.loads(_b64_pc.b64decode(x_payment).decode("utf-8"))
+        _raw = x_payment.strip()
+        if _raw.lower().startswith("x402 "):
+            _raw = _raw[len("x402 "):].strip()
+        elif _raw.lower().startswith("x-"):
+            _raw = _raw[2:].strip()
+        payment_payload = json.loads(_b64_pc.b64decode(_raw).decode("utf-8"))
     except Exception as e:
         print(f"TrustBoost: failed to decode payment token: {e}")
         return False, ""
