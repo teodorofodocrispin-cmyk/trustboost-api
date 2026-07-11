@@ -20,7 +20,14 @@ import time
 import httpx
 
 # ── Chain RPCs (public, read-only; no auth, no key) ──────────────────────────
-BASE_RPC = "https://mainnet.base.org"
+# Multiple Base RPCs as fallback — public RPCs (e.g. mainnet.base.org) are often
+# rate-limited or blocked from cloud sandboxes, so we try several before giving up.
+BASE_RPCS = [
+    "https://mainnet.base.org",
+    "https://base.llamarpc.com",
+    "https://rpc.ankr.com/base",
+    "https://base.meowrpc.com",
+]
 SOLANA_RPC = "https://api.mainnet-beta.solana.com"
 
 # ERC-20 USDC contract addresses
@@ -75,46 +82,46 @@ async def verify_onchain_direct(envelope: dict, pay_to: str, amount_micro: int,
 async def _verify_base(tx: str, pay_to: str, amount_micro: int) -> tuple[bool, str]:
     if not _is_hex(tx):
         return False, ""
-    try:
-        async with httpx.AsyncClient(timeout=8.0) as c:
-            # get tx receipt
-            r = await c.post(BASE_RPC, json={
-                "jsonrpc": "2.0", "id": 1, "method": "eth_getTransactionReceipt",
-                "params": [tx],
-            })
-            data = r.json().get("result")
-            if not data:
-                return False, ""
-            # get block for timestamp
-            blk = (await c.post(BASE_RPC, json={
-                "jsonrpc": "2.0", "id": 2, "method": "eth_getBlockByNumber",
-                "params": [data.get("blockNumber"), False],
-            })).json().get("result")
-            ts = int(blk.get("timestamp", "0x0"), 16) if blk else 0
-            if ts and (time.time() - ts) > MAX_TX_AGE_SECONDS:
-                print(f"[direct-verify] Base tx {tx[:10]} too old ({time.time()-ts:.0f}s)")
-                return False, ""
-            # Decode Transfer logs: topics[2] = to (indexed), data = value
-            pay_to_l = pay_to.lower()
-            for log in data.get("logs", []):
-                if log.get("address", "").lower() != USDC_BASE.lower():
+    last_err = ""
+    for rpc in BASE_RPCS:
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as c:
+                r = await c.post(rpc, json={
+                    "jsonrpc": "2.0", "id": 1, "method": "eth_getTransactionReceipt",
+                    "params": [tx],
+                })
+                data = r.json().get("result")
+                if not data:
                     continue
-                topics = log.get("topics", [])
-                # Transfer(from,to): topics[0]=sig, [1]=from, [2]=to
-                if len(topics) < 3:
-                    continue
-                to_addr = "0x" + topics[2][26:]
-                if to_addr.lower() == pay_to_l:
-                    value = int(log.get("data", "0x0"), 16)
-                    if value >= amount_micro:
-                        # payer from topics[1]
-                        payer = "0x" + topics[1][26:]
-                        print(f"[direct-verify] Base tx {tx[:10]} OK: {value} uUSDC to {pay_to_l[:10]}")
-                        return True, payer
-            return False, ""
-    except Exception as e:
-        print(f"[direct-verify] Base RPC error: {type(e).__name__}: {str(e)[:80]}")
-        return False, ""
+                blk = (await c.post(rpc, json={
+                    "jsonrpc": "2.0", "id": 2, "method": "eth_getBlockByNumber",
+                    "params": [data.get("blockNumber"), False],
+                })).json().get("result")
+                ts = int(blk.get("timestamp", "0x0"), 16) if blk else 0
+                if ts and (time.time() - ts) > MAX_TX_AGE_SECONDS:
+                    print(f"[direct-verify] Base tx {tx[:10]} too old ({time.time()-ts:.0f}s)")
+                    return False, ""
+                pay_to_l = pay_to.lower()
+                for log in data.get("logs", []):
+                    if log.get("address", "").lower() != USDC_BASE.lower():
+                        continue
+                    topics = log.get("topics", [])
+                    if len(topics) < 3:
+                        continue
+                    to_addr = "0x" + topics[2][26:]
+                    if to_addr.lower() == pay_to_l:
+                        value = int(log.get("data", "0x0"), 16)
+                        if value >= amount_micro:
+                            payer = "0x" + topics[1][26:]
+                            print(f"[direct-verify] Base tx {tx[:10]} OK: {value} uUSDC to {pay_to_l[:10]}")
+                            return True, payer
+                return False, ""
+        except Exception as e:
+            last_err = f"{type(e).__name__}: {str(e)[:80]}"
+            print(f"[direct-verify] Base RPC {rpc} error: {last_err}")
+            continue
+    print(f"[direct-verify] Base tx {tx[:10]} not verified on any RPC ({last_err})")
+    return False, ""
 
 
 async def _verify_solana(tx: str, pay_to: str, amount_micro: int) -> tuple[bool, str]:
