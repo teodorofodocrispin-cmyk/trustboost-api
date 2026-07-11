@@ -1194,8 +1194,34 @@ async def helius_verify(tx_hash: str) -> tuple[bool, float]:
                 continue
     return False, 0
 
-# ── GPT-4o-mini: sanitización multilingüe + context-aware ──
 
+# ── BASE (eip155:8453) on-chain verify — mirrors helius_verify for Solana ──
+# ADDITIVE: parallel Base prepaid path. Reuses x402_direct_verify (already
+# validated against real mainnet tx). No Solana/Helius logic touched.
+async def base_verify(tx_hash: str) -> tuple[bool, float]:
+    """Verify a 149 USDC (or pay-per-call) ERC-20 transfer to WALLET_BASE on Base.
+    Mirrors helius_verify's contract: returns (is_valid, amount_usdc).
+    Falls back to False if the on-chain module is unavailable or RPC fails.
+    """
+    try:
+        import sys as _sys, os as _os
+        _here = _os.path.dirname(_os.path.abspath(__file__))
+        if _here not in _sys.path:
+            _sys.path.insert(0, _here)
+        import x402_direct_verify as _vmod
+        envelope = {"transactionHash": tx_hash, "network": "eip155:8453"}
+        ok, _payer = await _vmod.verify_onchain_direct(
+            envelope, WALLET_BASE, int(REQUIRED_PAYMENT_USDC * 1_000_000), "eip155:8453")
+        if not ok:
+            ok, _payer = await _vmod.verify_onchain_direct(
+                envelope, WALLET_BASE, int(0.01 * 1_000_000), "eip155:8453")
+        return bool(ok), float(REQUIRED_PAYMENT_USDC) if ok else 0.0
+    except Exception as e:
+        print(f"[base_verify] skipped: {type(e).__name__}: {str(e)[:80]}")
+        return False, 0.0
+
+
+# ── GPT-4o-mini: sanitización multilingüe + context-aware ──
 async def gpt_sanitize(text: str, context: str = "general") -> dict:
     """Sanitize text using the context-specific system prompt.
 
@@ -2037,8 +2063,15 @@ async def sanitize(
             quota_remaining = PAID_QUOTA - (paid_used + 1)
 
         else:
-            # Primer uso de este tx_hash — verificar pago en Helius
-            valid, amount = await helius_verify(req.tx_hash)
+            # Primer uso de este tx_hash — verificar pago on-chain.
+            # ADDITIVE: route by network. Base tx = "0x"+64hex; Solana = base58 signature.
+            _tx = (req.tx_hash or "").strip()
+            _is_base = _tx.lower().startswith("0x") and len(_tx) == 66 and all(
+                c in "0123456789abcdef" for c in _tx[2:])
+            if _is_base:
+                valid, amount = await base_verify(_tx)
+            else:
+                valid, amount = await helius_verify(_tx)
             if not valid:
                 return JSONResponse(
                     status_code=402,
