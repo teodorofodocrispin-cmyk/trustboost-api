@@ -387,4 +387,33 @@ Sin secreto, sin pago                -> 402 (control, sin cambios)
   fijo del endpoint — sin margen de descalce).
 - Static Parameter -> Header: `X-FLUXA-SECRET` = (secreto, no documentado aqui).
 - El secreto especifico vive solo en Render (env var) y en el Static Parameter
-  de FluxA — nunca en este archivo ni en el codigo.
+  de FluXA — nunca en este archivo ni en el codigo.
+
+---
+
+## Session — Jul 11, 2026 (Hermes Agent)
+
+**Objetivo:** Descubribilidad agente-a-agente (Fase A) + presencia en directorios (Fase C).
+
+### Fase A — agent discovery (aditivo, no toca core)
+Aplicado por Hermes Agent con token fine-grained read+write. Cambios 100% aditivos:
+- `GET /pricing` — NUEVO (tabla de precios machine-readable, tiers trial/pay-per-call/bundle, compliance EU AI Act).
+- `llms.txt` — sección "Agentic Commerce Stack for LATAM" + pipeline componible (TrustBoost→Intelica→VeraData).
+- (El `agent-card.json` de TrustBoost ya existía; no se tocó.)
+- Verificado: `py_compile` OK, import FastAPI OK en venv aislado, TestClient runtime 200 en rutas nuevas, deploy en Render OK.
+- Commit: `trustboost-api` main → `eaafb0a`.
+
+### Fase C — directorios (forks propios de la org)
+TrustBoost pasó de estar ausente en 2 de 4 directorios a aparecer en todos, cohesionado con el stack:
+- `awesome-x402` → +TrustBoost + sección stack (push `4fe2833`).
+- `awesome-agentic-commerce` → +TrustBoost (ya tenía Intelica) + sección stack (push `34caab8`).
+- `awesome-agent-payments-protocol` → +TrustBoost (ya tenía Intelica) + sección stack (push `faa0356`).
+- `awesome-mcp-servers` → ya tenía TrustBoost (merged); + sección stack (push `2f0a1a90`).
+- `agentcash-skills` → + skill TrustBoost (push `41f66c3`).
+
+### PRs externos
+- `Merit-Systems/agentcash-skills` #17 es de Intelica (OPEN). TrustBoost no tiene PRs externos pendientes conocidos.
+
+### Reglas respetadas
+- main.py siempre aditivo; nunca romper flujo de sanitización/pagos.
+- Cores intactos: x402, sanitización on-chain, Helius, Supabase sin cambios.
