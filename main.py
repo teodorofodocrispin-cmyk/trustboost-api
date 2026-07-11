@@ -1520,13 +1520,12 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None) -> tupl
     # USDC directly to our wallet), verify it against the chain RPC — no PayAI
     # JWT required. Falls through to PayAI below if no tx_hash is present.
     try:
-        import importlib.util as _ilu, os as _os
-        _spec = _ilu.spec_from_file_location(
-            "x402_direct_verify",
-            _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "x402_direct_verify.py"))
-        _mod = _ilu.module_from_spec(_spec)
-        _spec.loader.exec_module(_mod)
-        _vod = _mod.verify_onchain_direct
+        import sys as _sys, os as _os
+        _here = _os.path.dirname(_os.path.abspath(__file__))
+        if _here not in _sys.path:
+            _sys.path.insert(0, _here)
+        import x402_direct_verify as _vod_mod
+        _vod = _vod_mod.verify_onchain_direct
         _tx = payment_payload.get("transactionHash") or payment_payload.get("tx_hash")
         if _tx:
             _networks = [client_network] if client_network in NETWORK_CONFIGS else list(NETWORK_CONFIGS.keys())
