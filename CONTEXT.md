@@ -437,6 +437,6 @@ Verificado a nivel de módulo + enrutado + decode + fallback RPC (tx real de Int
 ### Fase MCP — discovery + server-card (Jul 12, 2026)
 Para máxima visibilidad agentica sin tocar el core:
 - **POST `/mcp`**: ya respondía 200 (discovery gratis). El card `/mcp-server-card.json` ya existía con `ap2_compatible`.
-- **Estado directorios MCP**: Glama ✅ (aprobado), Smithery ✅ (vivo), MCP.so ✅ ya listado (`mcp.so/server/trustboost-pii-sanitizer/teodorofodocrispin-cmyk`), PulseMCP ⏳ pendiente PR (archivo en `agentic-commerce-stack-demo/mcp-registry-listings/pulsemcp/trustboost.json`).
+- **Estado directorios MCP**: Glama ✅ (aprobado), Smithery ✅ (vivo), MCP.so ✅ ya listado (`mcp.so/server/trustboost-pii-sanitizer/teodorofodocrispin-cmyk`), PulseMCP ⏳ auto-index (su monorepo requiere Issue+assign y paquete Node/TS con CI; no PR drop-in. Se auto-descubre desde el card MCP servido en `/mcp-server-card.json`). No se hace PR manual.
 - **Google Agent Registry (fase futura)**: requiere proyecto GCP (no disponible hoy). Artifacts listos en `agentic-commerce-stack-demo/mcp-registry-listings/google-agent-registry/` para submit cuando se habilite GCP. No publicado.
 - **Artifacts de registro preparados** (Fase 2): `agentic-commerce-stack-demo/mcp-registry-listings/` contiene `pulsemcp/*.json` (3 servicios), `mcp.so-submit.md` (datos para submit manual), y `google-agent-registry/*.json` (fase futura GCP). Listos para PR/submit sin tocar cores.
