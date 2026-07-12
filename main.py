@@ -271,6 +271,13 @@ Google AP2 (A2A x402 extension): TrustBoost supports x402 stablecoin settlement 
 3. VeraData /entity/kyb or /sanctions → verify the LATAM counterparty ($0.05–$0.08)
 All three share the same x402 wallet (Base 0xCf1d…37E7) and the same agent-friendly,
 account-free, subscription-free model.
+
+## Agentic Commerce Stack for LATAM
+TrustBoost is part of a composable agentic stack with VeraData (verified LATAM data) and
+Intelica (competitive intelligence). A reference agent proves the end-to-end M2M loop:
+discovers all three, signs x402 payments, settles USDC on Base.
+Proof + replication guide: https://github.com/teodorofodocrispin-cmyk/agentic-commerce-stack-demo/blob/main/CASE-STUDY.md
+Pipeline: TrustBoost /sanitize/quick → Intelica /intel → VeraData /sanctions (all x402 on Base/Solana).
 """, media_type="text/plain")
 
 @app.get("/.well-known/agent-card.json")
