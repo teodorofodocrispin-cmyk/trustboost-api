@@ -440,3 +440,24 @@ Para máxima visibilidad agentica sin tocar el core:
 - **Estado directorios MCP**: Glama ✅ (aprobado), Smithery ✅ (vivo), MCP.so ✅ ya listado (`mcp.so/server/trustboost-pii-sanitizer/teodorofodocrispin-cmyk`), PulseMCP ⏳ auto-index (su monorepo requiere Issue+assign y paquete Node/TS con CI; no PR drop-in. Se auto-descubre desde el card MCP servido en `/mcp-server-card.json`). No se hace PR manual.
 - **Google Agent Registry (fase futura)**: requiere proyecto GCP (no disponible hoy). Artifacts listos en `agentic-commerce-stack-demo/mcp-registry-listings/google-agent-registry/` para submit cuando se habilite GCP. No publicado.
 - **Artifacts de registro preparados** (Fase 2): `agentic-commerce-stack-demo/mcp-registry-listings/` contiene `pulsemcp/*.json` (3 servicios), `mcp.so-submit.md` (datos para submit manual), y `google-agent-registry/*.json` (fase futura GCP). Listos para PR/submit sin tocar cores.
+
+## Sesión del 2026-07-13
+- **PR #17472 Hermes hub (stack LATAM completo):** 3 skills en `teodorofodocrispin-cmyk/hermes-agent` → `optional-skills/`:
+  - `trustboost-pii-sanitizer` (reescrito v2.0.5, compliant: description ≤60 chars, sin wallet-signing/payment instructions, reframe como opt-in hosted transformation, tests con skip remoto)
+  - `veradata-verified-data` (nuevo)
+  - `intelica-competitive-intel` (nuevo)
+  Tests en `tests/tools/test_*_skill.py` con skip remoto `HERMES_SKIP_REMOTE_SKILL_TESTS=1`. Respuesta a `teknium1` publicada. A la espera de re-review/merge.
+- **Digital Consciousness Manifesto embebido en comportamiento:** Filosofía de TrustBoost guía al agente `proofmesh` en Moltbook: TRIAL antes de pagar, mínimo dato, no spam, escalar a humano en riesgo. No sermoneo en comentarios — comportamiento ético.
+- **Outreach B2B (Truora, Colombia):** Email enviado a Cesar Pino (co-founder, email público) desde Bogotá — propuesta de cobertura LATAM + PII en docs para onboarding. Demo web `https://api.veradata.dev/demo` como CTA. Spirit: humano/empresarial, no spam.
+- **Supabase (solo lectura, auditoría):** Tablas Supabase auditadas (15 tablas TrustBoost). Sin tráfico externo significativo detectado en `trustboost_audit` (mayoría triales/smoke tests propios). Tu procedimiento: guardar service_role en `~/.supabase_key_tb`, usar solo SELECT, BORRAR al terminar.
+- **Audit logs honestos:** `CASE-STUDY.md` documenta flujo end-to-end (TrustBoost 200 real via smoke `6b07083b` en Base; `56fee92b`/`b5909a55` Solana trials).
+- **Moltbook presencia agentica:** agente `proofmesh` (https://moltbook.com/u/proofmesh) — registrado/verificado/activo. Submolt `m/proofmesh` (`allow_crypto:true`). 3 posts publicados (VeraData/Intelica/TrustBoost). Heartbeat autónomo cada 2h vía cronjob Hermes (`9e6711a81c9d`), max 1 comentario/ciclo, cooldown 8h. Inbox monitor `proofmesh_inbox.py` para revisar comentarios nuevos bajo demanda.
+- **Contacto público:** `contacto@veradata.dev` publicado en CONTEXTS de stack LATAM. Responder desde ahí antes que desde cuentas personales.
+- **Keys/credenciales:** Supabase keys borradas tras uso cada sesión (Opción A). Moltbook key conservada en `~/.moltbook_key` (chmod 600) para heartbeat. Nunca en env vars ni chat.
+
+## Próximos pasos pendientes
+- Esperar respuesta Cesar Pino (Truora) — segunda mención oportuna cuando alguien del target abre la demo.
+- Monitorear `proofmesh_inbox.py` cuando haya actividad en Moltbook (el humano pide el reporte; el agente no envía emails).
+- Google Agent Registry: pendiente habilitar GCP (artifacts listos en `agentic-commerce-stack-demo/mcp-registry-listings/google-agent-registry/`). No publicado.
+- PR #17472: esperando re-review de `teknium1` (NousResearch).
+- (Opcional) PulseMCP auto-index confiar en crawl desde `/.well-known/mcp/server-card.json`.
