@@ -461,3 +461,58 @@ Para máxima visibilidad agentica sin tocar el core:
 - Google Agent Registry: pendiente habilitar GCP (artifacts listos en `agentic-commerce-stack-demo/mcp-registry-listings/google-agent-registry/`). No publicado.
 - PR #17472: esperando re-review de `teknium1` (NousResearch).
 - (Opcional) PulseMCP auto-index confiar en crawl desde `/.well-known/mcp/server-card.json`.
+
+---
+
+## Sesión 2026-07-13 (parte 2) — Fixes x402: decode envelope + normalize_name
+
+### Root cause del "fluido falso" del demo agent
+El demo agent (`agentic-commerce-stack-demo/run_agent.py`) arma el `X-PAYMENT` como
+`"x402 " + base64(payload)` y lo envía con `transactionHash` on-chain (pago directo, sin
+facilitador). `verify_payment` en Intelica/VeraData hacía `b64decode(x_payment)` del string
+completo → el prefijo `"x402 "` rompía la decodificación → `transactionHash` nunca se
+encontraba → el backend caía al facilitador CDP/PayAI → 402. TrustBoost funcionaba porque
+no usa ese flujo (Solana/`tx_hash` en body, verificación on-chain directa ya cableada).
+
+### Fix 1 — decode del envelope (Intelica + VeraData)
+En `verify_payment`, antes de `b64decode` se quita el prefijo de esquema `"x402 "` (y cualquier
+`"x "`), así el `transactionHash` llega a `x402_direct_verify.verify_onchain_direct` y el pago
+on-chain directo se acepta sin facilitador. **Aditivo**: no toca el flujo de facilitador, solo
+arregla el decode del envelope directo.
+
+| Servicio | Commit | Fix |
+|---|---|---|
+| Intelica | `e94f42f` | decode `x402 ` prefix en `verify_payment` |
+| VeraData | `e79365d` | decode `x402 ` prefix en `verify_payment` |
+
+### Fix 2 — `normalize_name` undefined (VeraData)
+Tras el fix 1, el pago pasaba (200 en verify) pero `/sanctions` caía en `NameError: name
+'normalize_name' is not defined` (línea 1320) — la función solo se importaba localmente en
+otra función (`from fetchers.sanctions import ... normalize_name`), no a nivel módulo.
+Fix: definir `normalize_name(name)` a nivel módulo (mismo cuerpo que `fetchers/sanctions.py`).
+
+| Servicio | Commit | Fix |
+|---|---|---|
+| VeraData | `f733d19` | `normalize_name` definida a nivel módulo |
+
+### Validación en vivo (demo agent, wallet de prueba 0xB334…Fd671, Base mainnet)
+```
+TrustBoost /sanitize/quick   status=200  (Solana/Base, ya funcionaba)
+Intelica   /intel            status=200  (tx e9ae9c14… 0.05 USDC Base)
+VeraData   /sanctions        status=200  (tx 856d7cb0… 0.05 USDC Base, 59,454 entradas)
+```
+Loop M2M completo: discover → pay USDC on-chain → 200 con respuesta real, sin depender de
+facilitador (verificación on-chain directa vía `x402_direct_verify.py`). Cumple el manifiesto
+"verify, don't trust".
+
+### Nota de diagnóstico: logs `/x402station-wildcard-*`
+Los `GET /x402station-wildcard-{uuid}/{uuid}` → 404 en los logs NO son un facilitador de pago:
+x402station.com es una plataforma de **analytics/discovery** (no procesa pagos). Esos 404 son
+probing de monitoreo externo golpeando rutas que no existen — **inofensivos**, no bloquean pagos.
+El bug real de adopción era el decode del envelope (Fix 1), ya resuelto.
+
+### Verification status
+- Ad-hoc PASS: decode corrige envelope (`transactionHash` encontrado).
+- Ad-hoc PASS: `normalize_name` a nivel módulo coincide con `fetchers/sanctions.py`.
+- En vivo PASS: 3/3 servicios 200 con pago on-chain real (tx confirmadas en Base).
+- No es suite green del repo (cores sin tests automatizados); evidencia en vivo concluyente.
