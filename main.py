@@ -89,6 +89,13 @@ app.include_router(demo_router)
 from mcp_router import router as mcp_router
 app.include_router(mcp_router)
 
+@app.get("/.well-known/x402list.txt", include_in_schema=False)
+async def wellknown_x402list_verify():
+    """Domain-ownership proof for x402-list.com directory listing (one-time token)."""
+    from fastapi.responses import PlainTextResponse
+    return PlainTextResponse("x402list-verify-PTYz-Ja_WVtx-Bm-SR445DCzG3HmSkyL1_QeTAcRCYw\n")
+
+
 @app.get("/llms.txt")
 async def llms_txt():
     """Standard llms.txt for LLM and agent discovery."""
