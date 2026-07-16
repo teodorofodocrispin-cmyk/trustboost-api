@@ -1796,7 +1796,7 @@ X402_PAYMENT_INFO = {
                 "description": "Sanitize PII from text before it reaches LLMs. Detects emails, phone numbers, national IDs, API keys, and financial data across 8 languages. Returns sanitized_content, safety_score, and risk_category.",
                 "category": "privacy",
                 "tags": ["pii", "privacy", "sanitization", "gdpr", "eu-ai-act", "solana", "x402", "m2m"],
-                "logoUrl": "https://api.trustboost.dev/health",
+                "logoUrl": "https://api.trustboost.dev/logo.png",
                 "termsUrl": "https://github.com/teodorofodocrispin-cmyk/TrustBoost-PII-Sanitizer/blob/main/PRIVACY.md",
                 "homepage": "https://github.com/teodorofodocrispin-cmyk/TrustBoost-PII-Sanitizer",
                 "input": {
