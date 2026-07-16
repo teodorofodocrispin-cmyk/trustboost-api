@@ -514,7 +514,29 @@ El bug real de adopción era el decode del envelope (Fix 1), ya resuelto.
 ### Verification status
 - Ad-hoc PASS: decode corrige envelope (`transactionHash` encontrado).
 - Ad-hoc PASS: `normalize_name` a nivel módulo coincide con `fetchers/sanctions.py`.
-- En vivo PASS: 3/3 servicios 200 con pago on-chain real (tx confirmadas en Base).
+- En vivo PASS: 3/3 servicios 200 + pago on-chain real (tx confirmada en Base).
+
+### Fix 6 (2026-07-16): ERC-8004 `registrations` poblado + rechazo x402-list
+x402-list rechazó el update request de TrustBoost por dos razones:
+1. Los endpoints `/sanitize/quick`, `/redact`, `/detect` solo aceptan POST y devuelven
+   402 tras validar body (GET→405, POST vacío→422) → su probe no ve un 402 → no monitoreables.
+   Solo `/sanitize` expone 402 sin body. (No se arregló: es comportamiento correcto del estándar x402.)
+2. La claim "registrado en ERC-8004 agentId 59089" no era verificable: `registrations`
+   estaba vacío (`[]`) en `/.well-known/erc8004-agent.json` → ninguna superficie pública
+   exponía el agentId.
+
+Fix: poblar `registrations` con el agentId on-chain real en `erc8004_agent_card()`:
+```json
+"registrations": [{
+  "registry": "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432",
+  "chainId": 8453, "agentId": 59089, "standard": "eip-8004", "verified": true
+}]
+```
+Commit `feb95c3`. Verificado en vivo: `erc8004-agent.json` ahora expone `agentId: 59089`.
+Regla x402-list: 1 update request / email / 7 días → reintento agendado ~16-jul-2026.
+
+### Cron: reintento update x402-list (~16-jul-2026)
+Recordatorio agendado para resubir el update con la claim ERC-8004 ya verificable.
 - No es suite green del repo (cores sin tests automatizados); evidencia en vivo concluyente.
 
 ---
