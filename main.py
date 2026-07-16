@@ -6,6 +6,7 @@ import base58
 from typing import Optional, List, Literal
 import httpx
 from fastapi import FastAPI, Request, Header
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from openai import AsyncOpenAI
@@ -1847,11 +1848,11 @@ X402_METHOD_HEADERS = {
     "X-402-Bundle-Address": PAYMENT_WALLET,
 }
 
-@app.exception_handler(422)
-async def validation_exception_handler(request: Request, exc):
-    """Return 402 instead of 422 when /sanitize receives no body.
-    Allows x402 validators to discover payment requirements without a valid payload.
-    """
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Return 402 instead of 422 when /sanitize or /redact receive an invalid/missing body.
+    Allows x402 validators (agentic.market, x402-list) to discover payment
+    requirements without a valid payload."""
     if request.url.path in ["/sanitize", "/redact"]:
         import base64, json
         return JSONResponse(
