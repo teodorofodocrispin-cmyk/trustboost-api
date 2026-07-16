@@ -518,14 +518,15 @@ El bug real de adopción era el decode del envelope (Fix 1), ya resuelto.
 
 ### Fix 6 (2026-07-16): ERC-8004 `registrations` poblado + rechazo x402-list
 x402-list rechazó el update request de TrustBoost por dos razones:
-1. Los endpoints `/sanitize/quick`, `/redact`, `/detect` solo aceptan POST y devuelven
-   402 tras validar body (GET→405, POST vacío→422) → su probe no ve un 402 → no monitoreables.
-   Solo `/sanitize` expone 402 sin body. (No se arregló: es comportamiento correcto del estándar x402.)
-2. La claim "registrado en ERC-8004 agentId 59089" no era verificable: `registrations`
+1. Los endpoints `/sanitize/quick`, `/redact`, `/detect` solo aceptan POST y devolvían
+   405 (GET) / 422 (POST sin body) antes de la validación de pago → su probe no veía 402.
+   Corregido en Fix 7 (middleware x402 discovery): ahora todos devuelven 402+PAYMENT-REQUIRED
+   a sondeos sin pago.
+3. La claim "registrado en ERC-8004 agentId 59089" no era verificable: `registrations`
    estaba vacío (`[]`) en `/.well-known/erc8004-agent.json` → ninguna superficie pública
    exponía el agentId.
 
-Fix: poblar `registrations` con el agentId on-chain real en `erc8004_agent_card()`:
+Fix registrations: poblar `registrations` con el agentId on-chain real en `erc8004_agent_card()`:
 ```json
 "registrations": [{
   "registry": "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432",
@@ -534,6 +535,24 @@ Fix: poblar `registrations` con el agentId on-chain real en `erc8004_agent_card(
 ```
 Commit `fe5309e` (push tras verificación en vivo). Verificado en vivo: `erc8004-agent.json` ahora expone `agentId: 59089`.
 Regla x402-list: 1 update request / email / 7 días → reintento agendado ~16-jul-2026 (no antes, o será rechazado por rate-limit).
+
+### Fix 7 (2026-07-16): middleware x402 discovery — 422/405 → 402 para agentic.market
+`agentic.market` (y otros validadores x402) sondean con GET o POST sin body y esperan
+HTTP 402 + header `PAYMENT-REQUIRED`. Antes: `/redact`, `/detect`, `/sanitize/quick`
+devolvían 405 (GET) / 422 (POST sin body válido) porque FastAPI validaba el body
+Pydantic ANTES de llegar a la rama 402 → el validador veía "no x402 setup detected".
+Solo `/sanitize` pasaba (ya devolvía 402 sin body).
+
+Fix: middleware `x402_discovery_middleware` (aditivo, tras CORS) que intercepta las rutas
+de pago (`/sanitize`, `/redact`, `/detect`, `/sanitize/quick`) y, si el request NO trae
+header de pago (`x-payment`/`payment-signature`/`x402-payment`/`authorization`), responde
+402 vía `build_percall_402` (emite header `PAYMENT-REQUIRED` base64) ANTES de la validación
+de body. Si trae pago, deja pasar al handler (que ya verifica). Así el sondeo GET/POST-vacío
+recibe 402, no 405/422.
+
+Commit `47fb9c0` (push tras verificación en vivo). Verificado en vivo: los 4 endpoints
+ahora devuelven `HTTP 402` + header `payment-required: eyJ4ND...` a GET sin pago.
+`agentic.market` ahora debe detectar x402 setup en todos los endpoints de pago.
 
 ### Cron: reintento update x402-list (~16-jul-2026)
 Recordatorio agendado para resubir el update con la claim ERC-8004 ya verificable.
