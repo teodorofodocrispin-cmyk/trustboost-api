@@ -532,8 +532,8 @@ Fix: poblar `registrations` con el agentId on-chain real en `erc8004_agent_card(
   "chainId": 8453, "agentId": 59089, "standard": "eip-8004", "verified": true
 }]
 ```
-Commit `feb95c3`. Verificado en vivo: `erc8004-agent.json` ahora expone `agentId: 59089`.
-Regla x402-list: 1 update request / email / 7 días → reintento agendado ~16-jul-2026.
+Commit `fe5309e` (push tras verificación en vivo). Verificado en vivo: `erc8004-agent.json` ahora expone `agentId: 59089`.
+Regla x402-list: 1 update request / email / 7 días → reintento agendado ~16-jul-2026 (no antes, o será rechazado por rate-limit).
 
 ### Cron: reintento update x402-list (~16-jul-2026)
 Recordatorio agendado para resubir el update con la claim ERC-8004 ya verificable.
