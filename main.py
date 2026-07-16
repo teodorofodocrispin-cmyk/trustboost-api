@@ -84,6 +84,27 @@ app.add_middleware(
     ],
 )
 
+# ── x402 discovery middleware (aditivo) ──────────────────────────────────────
+# Intercepta las rutas de pago y devuelve 402 + PAYMENT-REQUIRED a requests sin
+# header de pago, ANTES de que FastAPI valide el body Pydantic (que daria 422).
+# Esto hace que sondeos de discovery (GET o POST sin body, como agentic.market /
+# x402-list) vean un 402 valido en vez de 422/405. Si el request trae header de
+# pago, se deja pasar al handler, que ya verifica y responde 402 si el pago falla.
+_PAYMENT_HEADERS = {"x-payment", "payment-signature", "x402-payment", "authorization"}
+_X402_PAID_ROUTES = {"/sanitize", "/redact", "/detect", "/sanitize/quick"}
+
+
+@app.middleware("http")
+async def x402_discovery_middleware(request: Request, call_next):
+    path = request.url.path.rstrip("/")
+    if path in _X402_PAID_ROUTES:
+        has_payment = any(h in request.headers for h in _PAYMENT_HEADERS)
+        if not has_payment:
+            price = PRICE_SANITIZE_PERCALL if path != "/sanitize" else "0.01"
+            return build_percall_402(str(request.url), price)
+    return await call_next(request)
+
+
 from demo_router import router as demo_router
 app.include_router(demo_router)
 
