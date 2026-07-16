@@ -280,6 +280,34 @@ Proof + replication guide: https://github.com/teodorofodocrispin-cmyk/agentic-co
 Pipeline: TrustBoost /sanitize/quick → Intelica /intel → VeraData /sanctions (all x402 on Base/Solana).
 """, media_type="text/plain")
 
+@app.get("/.well-known/erc8004-agent.json")
+async def erc8004_agent_card():
+    """Agent card in ERC-8004 Identity Registry format (eip-8004#registration-v1).
+    Lets agents discover TrustBoost on the ERC-8004 Identity Registry (Base mainnet:
+    0x8004A169FB4a3325136EB29fA0ceB6D2e539a432) and link validation to the on-chain proof.
+    Additive: does not alter the existing Circle-format agent-card.json route."""
+    return {
+        "type": "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
+        "name": "TrustBoost",
+        "description": "PII sanitization for autonomous AI agent pipelines with on-chain proof. Every paid sanitization returns a cryptographic receipt (hash commits input to output), anchored and verifiable forever. The only PII sanitizer with on-chain attestation. Pay-per-call via x402.",
+        "image": "https://api.trustboost.dev/logo.png",
+        "services": [
+            {"name": "MCP", "endpoint": "https://api.trustboost.dev/mcp", "version": "2025-06-18"},
+            {"name": "A2A", "endpoint": "https://api.trustboost.dev/.well-known/agent-card.json", "version": "0.3.0"},
+            {"name": "web", "endpoint": "https://api.trustboost.dev/sanitize"},
+        ],
+        "x402Support": True,
+        "active": True,
+        "agentWallet": "giu4VciTkfWJNG1oeP6SzHEJwmabikJSMB91GaFNWE4",
+        "registrations": [],
+        "supportedTrust": ["reputation", "crypto-economic"],
+        "validation": {
+            "method": "on-chain proof per call",
+            "description": "Each paid sanitization anchors a receipt tx; verify at https://api.trustboost.dev/verify/{anchor_tx}",
+        },
+    }
+
+
 @app.get("/.well-known/agent-card.json")
 async def agent_card():
     """
