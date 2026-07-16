@@ -1733,6 +1733,30 @@ def build_percall_402(resource_url: str, price_usdc: str) -> Response:
         "resource": {"url": resource_url, "description": "PII sanitization — pay-per-call entry point", "mimeType": "application/json"},
         "accepts": accepts,
         "error": "Payment required",
+        "extensions": {
+            "bazaar": {
+                "info": {
+                    "input": {"type": "http", "method": "POST",
+                        "example": {"text": "Mi cédula es 12345678 y mi email es a@b.com"}},
+                    "output": {"type": "json",
+                        "example": {"status": "success", "data": {"sanitized_content": "Mi cédula es [REDACTED] y mi email es [REDACTED]"}, "sanitization_hash": "sha256..."}},
+                },
+                "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                        "input": {"type": "object",
+                            "properties": {"type": {"type": "string"}, "method": {"type": "string"}},
+                            "required": ["type", "method"]},
+                        "output": {"type": "object", "properties": {"type": {"type": "string"}},
+                            "required": ["type"]},
+                    },
+                    "required": ["input"],
+                },
+                "serviceName": "TrustBoost",
+                "tags": ["privacy", "pii", "sanitization", "compliance", "x402"],
+            }
+        },
     }
     body_payload = {
         **header_payload,
