@@ -1550,8 +1550,10 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None) -> tupl
     if not x_payment:
         return False, ""
 
-    # [DEBUG] log raw header to diagnose decode failures in prod
-    print(f"[DEBUG] x_payment raw (first 80): {repr((x_payment or '')[:80])}")
+    # Defensive: callers may pass a FastAPI Header object, not a str.
+    x_payment = str(x_payment) if x_payment is not None else ""
+    if not x_payment:
+        return False, ""
 
     price = price_usdc or PRICE_SANITIZE_PERCALL
     amount = str(int(float(price) * 1_000_000))
