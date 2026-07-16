@@ -299,7 +299,15 @@ async def erc8004_agent_card():
         "x402Support": True,
         "active": True,
         "agentWallet": "giu4VciTkfWJNG1oeP6SzHEJwmabikJSMB91GaFNWE4",
-        "registrations": [],
+        "registrations": [
+            {
+                "registry": "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432",
+                "chainId": 8453,
+                "agentId": 59089,
+                "standard": "eip-8004",
+                "verified": True,
+            }
+        ],
         "supportedTrust": ["reputation", "crypto-economic"],
         "validation": {
             "method": "on-chain proof per call",
