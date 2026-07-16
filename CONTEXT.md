@@ -516,3 +516,29 @@ El bug real de adopción era el decode del envelope (Fix 1), ya resuelto.
 - Ad-hoc PASS: `normalize_name` a nivel módulo coincide con `fetchers/sanctions.py`.
 - En vivo PASS: 3/3 servicios 200 con pago on-chain real (tx confirmadas en Base).
 - No es suite green del repo (cores sin tests automatizados); evidencia en vivo concluyente.
+
+---
+
+## Sesión 2026-07-15 — Registro ERC-8004 en Base mainnet (Identity Registry)
+
+### Qué se hizo
+Se agregó agent card en formato **ERC-8004 Identity Registry** (`eip-8004#registration-v1`) a TrustBoost,
+expuesto en `GET /.well-known/erc8004-agent.json` (junto al `agent-card.json` de Circle existente).
+Declara `services` (MCP + A2A), `x402Support: true`, `supportedTrust` y `validation` apuntando a la
+prueba on-chain por sanitización. Commit `0ae98ad`.
+
+### Registro on-chain (Base mainnet)
+Los 3 servicios se registraron en el ERC-8004 Identity Registry oficial (`0x8004A169FB4a3325136EB29fA0ceB6D2e539a432`).
+Wallet minera: `0xd6D31e09bD839A9883f9f99B72704E7C8837C669`.
+
+| Servicio | agentId | agentURI |
+|---|---|---|
+| VeraData | 59087 | https://api.veradata.dev/.well-known/agent-card.json |
+| Intelica | 59088 | https://api.intelica.dev/.well-known/agent-card.json |
+| TrustBoost | 59089 | https://api.trustboost.dev/.well-known/erc8004-agent.json |
+
+### Por qué importa
+ERC-8004 es la capa de identidad/confianza del agent economy. Al registrar TrustBoost en el Identity
+Registry de Base, su prueba de redacción PII es verificable y descubrible on-chain por cualquier agente,
+sin Google Agent Registry/GCP. La on-chain proof por call ya es el validation artifact del estándar.
+
