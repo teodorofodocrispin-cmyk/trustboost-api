@@ -1707,7 +1707,7 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None, resourc
                         # Carga la key (maneja SEC1 EC y RSA) y pasa el OBJETO a jwt.encode
                         # (replica _build_cdp_jwt de VeraData/Intelica, que SI funciona).
                         _private_key = _ser.load_pem_private_key(_pem.encode("utf-8"), password=None)
-                        _uri = f"POST api.cdp.coinbase.com{_url_path(fac['url'])}"
+                        _uri = f"POST api.cdp.coinbase.com{_url_path(fac['url'])}/verify"
                         _now = int(_time.time())
                         _jwt = _jwt.encode(
                             {"iss": "cdp", "nbf": _now, "exp": _now + 120,
