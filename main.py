@@ -64,6 +64,12 @@ PAID_QUOTA            = int(os.getenv("PAID_QUOTA", "10000"))
 REQUIRED_PAYMENT_USDC = int(os.getenv("REQUIRED_PAYMENT_USDC", "149"))
 PRICE_SANITIZE_PERCALL = os.getenv("PRICE_SANITIZE_PERCALL", "0.01")  # pay-per-call entry point (USDC)
 PAYAI_FACILITATOR_URL  = os.getenv("PAYAI_FACILITATOR_URL", "https://facilitator.payai.network")
+# CDP Facilitator (Coinbase) — primario. El Bazaar de agentic.market (CDP Bazaar)
+# indexa SOLO endpoints que settlean via CDP. Sin esto TrustBoost no aparece en
+# agentic.market pese a pagos validos via PayAI. Replica el setup de VeraData/Intelica.
+CDP_FACILITATOR_URL   = os.getenv("CDP_FACILITATOR_URL", "https://api.cdp.coinbase.com/platform/v2/x402")
+CDP_API_KEY_ID        = os.getenv("CDP_API_KEY_ID", "").strip()
+CDP_API_KEY_SECRET    = os.getenv("CDP_API_KEY_SECRET", "")
 FLUXA_PROXY_SECRET     = os.getenv("FLUXA_PROXY_SECRET", "")  # aditivo: reconoce llamadas ya cobradas/liquidadas por FluxA Monetize
 WALLET_BASE             = os.getenv("WALLET_BASE", "0xCf1d31020A7915421f6d66B9835Dcb6f422337E7")  # shared wallet, same as VeraData/Intelica
 USDC_BASE_CONTRACT      = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
@@ -1679,44 +1685,73 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None) -> tupl
             "paymentRequirements": requirements,
         }
 
-        try:
-            async with _httpx_pc.AsyncClient(timeout=8.0) as client:
-                resp = await client.post(
-                    f"{PAYAI_FACILITATOR_URL}/verify",
-                    json=verify_body,
-                    headers={"Content-Type": "application/json"},
-                )
-            if resp.status_code == 200 and resp.json().get("isValid", False):
-                payer = payment_payload.get("payload", {}).get("authorization", {}).get("from", "")
-                # Settle con reintento y errores EXPLICITOS (no tragados). El Bazaar
-                # indexa solo si el facilitador registra el settle on-chain.
-                settle_ok = False
-                last_err = ""
-                for _attempt in range(2):
+        # Facilitators: CDP primero (indexa en el Bazaar de agentic.market),
+        # PayAI como fallback. Replica el setup de VeraData/Intelica.
+        facilitators = []
+        if CDP_API_KEY_ID and CDP_API_KEY_SECRET:
+            facilitators.append({"url": CDP_FACILITATOR_URL, "name": "cdp", "auth": "cdp"})
+        facilitators.append({"url": PAYAI_FACILITATOR_URL, "name": "payai", "auth": None})
+
+        for fac in facilitators:
+            try:
+                headers = {"Content-Type": "application/json"}
+                if fac["auth"] == "cdp":
                     try:
-                        async with _httpx_pc.AsyncClient(timeout=10.0) as sc:
-                            sresp = await sc.post(
-                                f"{PAYAI_FACILITATOR_URL}/settle",
-                                json=verify_body,
-                                headers={"Content-Type": "application/json"},
-                            )
-                        if sresp.status_code == 200:
-                            settle_ok = True
-                            break
-                        last_err = f"HTTP {sresp.status_code}: {sresp.text[:200]}"
-                    except Exception as se:
-                        last_err = f"{type(se).__name__}: {str(se)[:200]}"
-                    print(f"TrustBoost settle attempt {_attempt+1} failed: {last_err}")
-                if not settle_ok:
-                    print(f"TrustBoost settle FAILED after retries: {last_err}")
-                else:
-                    print(f"TrustBoost settle OK (payer={payer})")
-                return True, payer
-        except Exception as e:
-            print(f"TrustBoost verify error on {network}: {e}")
-            continue
+                        import secrets as _secrets, time as _time, jwt as _jwt
+                        _pem = CDP_API_KEY_SECRET.strip().replace("\\n", "\n")
+                        _uri = f"POST api.cdp.coinbase.com{_url_path(fac['url'])}"
+                        _now = int(_time.time())
+                        _jwt = _jwt.encode(
+                            {"sub": CDP_API_KEY_ID, "uri": _uri, "iat": _now, "exp": _now + 120,
+                             "iss": "cdp", "aud": ["cdp_service_ethereum"], "nbf": _now},
+                            _pem, algorithm="RS256",
+                            headers={"kid": CDP_API_KEY_ID, "nonce": _secrets.token_hex(16), "typ": "JWT"},
+                        )
+                        headers["Authorization"] = f"Bearer {_jwt}"
+                    except Exception as _je:
+                        print(f"TrustBoost CDP auth build failed: {_je}")
+                        continue
+                async with _httpx_pc.AsyncClient(timeout=8.0) as client:
+                    resp = await client.post(
+                        f"{fac['url']}/verify",
+                        json=verify_body,
+                        headers=headers,
+                    )
+                if resp.status_code == 200 and resp.json().get("isValid", False):
+                    payer = payment_payload.get("payload", {}).get("authorization", {}).get("from", "")
+                    settle_ok = False
+                    last_err = ""
+                    for _attempt in range(2):
+                        try:
+                            async with _httpx_pc.AsyncClient(timeout=10.0) as sc:
+                                sresp = await sc.post(
+                                    f"{fac['url']}/settle",
+                                    json=verify_body,
+                                    headers=headers,
+                                )
+                            if sresp.status_code == 200:
+                                settle_ok = True
+                                break
+                            last_err = f"HTTP {sresp.status_code}: {sresp.text[:200]}"
+                        except Exception as se:
+                            last_err = f"{type(se).__name__}: {str(se)[:200]}"
+                        print(f"TrustBoost settle ({fac['name']}) attempt {_attempt+1} failed: {last_err}")
+                    if not settle_ok:
+                        print(f"TrustBoost settle ({fac['name']}) FAILED: {last_err}")
+                        continue  # prueba el siguiente facilitador
+                    print(f"TrustBoost settle OK via {fac['name']} (payer={payer})")
+                    return True, payer
+            except Exception as e:
+                print(f"TrustBoost verify error on {fac['name']}: {e}")
+                continue
 
     return False, ""
+
+
+def _url_path(base_url: str) -> str:
+    """Extrae el path de una facilitador URL para firmar el JWT CDP."""
+    from urllib.parse import urlparse
+    return urlparse(base_url).path or "/"
 
 
 def build_percall_402(resource_url: str, price_usdc: str) -> Response:
