@@ -1700,21 +1700,20 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None, resourc
                 if fac["auth"] == "cdp":
                     try:
                         import secrets as _secrets, time as _time, jwt as _jwt
-                        _pem = CDP_API_KEY_SECRET.strip()
-                        # Normaliza saltos de linea literales (\n) a reales, por si la
-                        # env var llega con backslash-n en vez de newline real.
-                        _pem = _pem.replace("\\n", "\n")
-                        # Detecta el tipo de key por el HEADER del PEM (infalible).
-                        # CDP acepta EC (ES256) o RSA (RS256).
-                        _is_ec = "EC PRIVATE KEY" in _pem or "EC PRIVATE" in _pem
-                        _algo = "ES256" if _is_ec else "RS256"
+                        from cryptography.hazmat.primitives import serialization as _ser
+                        _pem = CDP_API_KEY_SECRET.strip().replace("\\n", "\n")
+                        if not _pem.endswith("\n"):
+                            _pem += "\n"
+                        # Carga la key (maneja SEC1 EC y RSA) y pasa el OBJETO a jwt.encode
+                        # (replica _build_cdp_jwt de VeraData/Intelica, que SI funciona).
+                        _private_key = _ser.load_pem_private_key(_pem.encode("utf-8"), password=None)
                         _uri = f"POST api.cdp.coinbase.com{_url_path(fac['url'])}"
                         _now = int(_time.time())
                         _jwt = _jwt.encode(
-                            {"sub": CDP_API_KEY_ID, "uri": _uri, "iat": _now, "exp": _now + 120,
-                             "iss": "cdp", "aud": ["cdp_service_ethereum"], "nbf": _now},
-                            _pem, algorithm=_algo,
-                            headers={"kid": CDP_API_KEY_ID, "nonce": _secrets.token_hex(16), "typ": "JWT"},
+                            {"iss": "cdp", "nbf": _now, "exp": _now + 120,
+                             "sub": CDP_API_KEY_ID.strip(), "uri": _uri},
+                            _private_key, algorithm="ES256",
+                            headers={"kid": CDP_API_KEY_ID.strip(), "nonce": _secrets.token_hex(16), "typ": "JWT"},
                         )
                         headers["Authorization"] = f"Bearer {_jwt}"
                     except Exception as _je:
@@ -1793,16 +1792,18 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None, resourc
                                         _settle_headers = {"Content-Type": "application/json"}
                                         try:
                                             import secrets as _sec2, time as _t2, jwt as _j2
+                                            from cryptography.hazmat.primitives import serialization as _ser2
                                             _pem2 = CDP_API_KEY_SECRET.strip().replace("\\n", "\n")
-                                            _is_ec2 = "EC PRIVATE KEY" in _pem2 or "EC PRIVATE" in _pem2
-                                            _algo2 = "ES256" if _is_ec2 else "RS256"
+                                            if not _pem2.endswith("\n"):
+                                                _pem2 += "\n"
+                                            _key2 = _ser2.load_pem_private_key(_pem2.encode("utf-8"), password=None)
                                             _uri2 = f"POST api.cdp.coinbase.com{_url_path(fac['url'])}/settle"
                                             _now2 = int(_t2.time())
                                             _jwt2 = _j2.encode(
-                                                {"sub": CDP_API_KEY_ID, "uri": _uri2, "iat": _now2, "exp": _now2 + 120,
-                                                 "iss": "cdp", "aud": ["cdp_service_ethereum"], "nbf": _now2},
-                                                _pem2, algorithm=_algo2,
-                                                headers={"kid": CDP_API_KEY_ID, "nonce": _sec2.token_hex(16), "typ": "JWT"},
+                                                {"iss": "cdp", "nbf": _now2, "exp": _now2 + 120,
+                                                 "sub": CDP_API_KEY_ID.strip(), "uri": _uri2},
+                                                _key2, algorithm="ES256",
+                                                headers={"kid": CDP_API_KEY_ID.strip(), "nonce": _sec2.token_hex(16), "typ": "JWT"},
                                             )
                                             _settle_headers["Authorization"] = f"Bearer {_jwt2}"
                                         except Exception as _je2:
