@@ -1623,7 +1623,6 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None, resourc
     # dentro de "accepted" (el objeto que eligieron de accepts[] en el 402).
     # Revisar ambos lugares evita probar redes que el cliente nunca firmo.
     client_network = payment_payload.get("network") or payment_payload.get("accepted", {}).get("network", "")
-    print(f"[DIAG] payment_payload keys={list(payment_payload.keys())} network={client_network!r}")
 
     NETWORK_CONFIGS = {
         "eip155:8453": {
@@ -1690,7 +1689,6 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None, resourc
             "paymentPayload": full_payload,
             "paymentRequirements": requirements,
         }
-        print(f"[DIAG] network={network} verify_body={json.dumps(verify_body)[:800]}")
 
         # Facilitators: CDP primero (indexa en el Bazaar de agentic.market),
         # PayAI como fallback. Replica el setup de VeraData/Intelica.
