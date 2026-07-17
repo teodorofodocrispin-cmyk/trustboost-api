@@ -1618,8 +1618,11 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None, resourc
         print(f"TrustBoost: failed to decode payment token: {e}")
         return False, ""
 
-    # Detect which network the client signed for
-    client_network = payment_payload.get("network", "")
+    # Detect which network the client signed for. Clientes x402 v2 reales (ej.
+    # agentcash) no ponen "network" en la raiz del payload -- lo mandan anidado
+    # dentro de "accepted" (el objeto que eligieron de accepts[] en el 402).
+    # Revisar ambos lugares evita probar redes que el cliente nunca firmo.
+    client_network = payment_payload.get("network") or payment_payload.get("accepted", {}).get("network", "")
     print(f"[DIAG] payment_payload keys={list(payment_payload.keys())} network={client_network!r}")
 
     NETWORK_CONFIGS = {
