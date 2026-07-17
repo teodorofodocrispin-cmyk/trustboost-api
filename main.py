@@ -1577,7 +1577,7 @@ import httpx as _httpx_pc
 USDC_SOLANA_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 
 
-async def verify_payment_percall(x_payment: str, price_usdc: str = None) -> tuple[bool, str]:
+async def verify_payment_percall(x_payment: str, price_usdc: str = None, resource_url: str = None) -> tuple[bool, str]:
     """
     Verify a single x402 payment via PayAI facilitator.
     Supports both Base mainnet and Solana mainnet — detects network from the
@@ -1740,6 +1740,73 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None) -> tupl
                                 )
                             if sresp.status_code == 200:
                                 settle_ok = True
+                                # CDP Bazaar indexing: el settle debe llevar resource.url +
+                                # extensions.bazaar en el paymentPayload (no solo verify).
+                                # Replica el setup de VeraData/Intelica.
+                                if fac["auth"] == "cdp" and resource_url:
+                                    try:
+                                        _bazaar_ext = {
+                                            "bazaar": {
+                                                "info": {
+                                                    "input": {"type": "http", "method": "POST",
+                                                              "example": {"text": "Mi cedula es 12345678"}},
+                                                    "output": {"type": "json",
+                                                               "example": {"sanitized_content": "Mi cedula es [REDACTED]",
+                                                                           "entities_removed": True}},
+                                                },
+                                                "schema": {
+                                                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                                                    "type": "object",
+                                                    "properties": {
+                                                        "input": {"type": "object",
+                                                                  "properties": {"type": {"type": "string", "const": "http"},
+                                                                                 "method": {"type": "string", "enum": ["POST"]}},
+                                                                  "required": ["type", "method"]},
+                                                        "output": {"type": "object",
+                                                                   "properties": {"type": {"type": "string"}},
+                                                                   "required": ["type"]},
+                                                    },
+                                                    "required": ["input"],
+                                                },
+                                            }
+                                        }
+                                        _full_payload_with_resource = {
+                                            **full_payload,
+                                            "resource": {"url": resource_url},
+                                            "extensions": _bazaar_ext,
+                                        }
+                                        _settle_body_bazaar = {
+                                            "x402Version": 2,
+                                            "paymentPayload": _full_payload_with_resource,
+                                            "paymentRequirements": requirements,
+                                        }
+                                        # JWT CDP propio para /settle (path distinto a /verify)
+                                        _settle_headers = {"Content-Type": "application/json"}
+                                        try:
+                                            import secrets as _sec2, time as _t2, jwt as _j2
+                                            _pem2 = CDP_API_KEY_SECRET.strip().replace("\\n", "\n")
+                                            _is_ec2 = "EC PRIVATE KEY" in _pem2 or "EC PRIVATE" in _pem2
+                                            _algo2 = "ES256" if _is_ec2 else "RS256"
+                                            _uri2 = f"POST api.cdp.coinbase.com{_url_path(fac['url'])}/settle"
+                                            _now2 = int(_t2.time())
+                                            _jwt2 = _j2.encode(
+                                                {"sub": CDP_API_KEY_ID, "uri": _uri2, "iat": _now2, "exp": _now2 + 120,
+                                                 "iss": "cdp", "aud": ["cdp_service_ethereum"], "nbf": _now2},
+                                                _pem2, algorithm=_algo2,
+                                                headers={"kid": CDP_API_KEY_ID, "nonce": _sec2.token_hex(16), "typ": "JWT"},
+                                            )
+                                            _settle_headers["Authorization"] = f"Bearer {_jwt2}"
+                                        except Exception as _je2:
+                                            print(f"TrustBoost CDP settle JWT failed: {_je2}")
+                                        async with _httpx_pc.AsyncClient(timeout=10.0) as sc2:
+                                            sresp2 = await sc2.post(
+                                                f"{fac['url']}/settle",
+                                                json=_settle_body_bazaar,
+                                                headers=_settle_headers,
+                                            )
+                                        print(f"TrustBoost CDP Bazaar settle: {sresp2.status_code} {sresp2.text[:120]}")
+                                    except Exception as _be:
+                                        print(f"TrustBoost CDP Bazaar settle error (non-fatal): {_be}")
                                 break
                             last_err = f"HTTP {sresp.status_code}: {sresp.text[:200]}"
                         except Exception as se:
@@ -2036,7 +2103,7 @@ async def sanitize(
         # not an actual payment attempt. Fall through to normal 402 flow below.
         pass
     elif x_payment:
-        _valid, percall_payer = await verify_payment_percall(x_payment, PRICE_SANITIZE_PERCALL)
+        _valid, percall_payer = await verify_payment_percall(x_payment, PRICE_SANITIZE_PERCALL, str(request.url))
         if not _valid:
             return JSONResponse(status_code=402, content={"status": "payment_verification_failed", "message": "x402 payment could not be verified."})
         # Payment verified — skip TRIAL/tx_hash checks entirely, proceed straight to sanitization
@@ -2457,7 +2524,7 @@ async def sanitize_quick(
     if is_fluxa_proxied:
         valid, payer = True, "fluxa-proxy"
     else:
-        valid, payer = await verify_payment_percall(x_payment, PRICE_SANITIZE_PERCALL)
+        valid, payer = await verify_payment_percall(x_payment, PRICE_SANITIZE_PERCALL, str(request.url))
     if not valid:
         return JSONResponse(status_code=402, content={
             "status": "payment_verification_failed",
