@@ -1740,13 +1740,37 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None, resourc
                     # real tras un verify exitoso, replicando la misma logica ya probada.
                     settle_ok = False
                     last_err = ""
+                    # JWT propio para /settle (distinto path que /verify) -- reutilizar
+                    # los headers de /verify aqui era el bug: CDP valida el claim "uri"
+                    # del JWT contra el path exacto de la request, y rechaza con 401
+                    # cuando no coincide.
+                    settle_headers_main = dict(headers)
+                    if fac["auth"] == "cdp":
+                        try:
+                            import secrets as _sec0, time as _t0, jwt as _j0
+                            from cryptography.hazmat.primitives import serialization as _ser0
+                            _pem0 = CDP_API_KEY_SECRET.strip().replace("\\n", "\n")
+                            if not _pem0.endswith("\n"):
+                                _pem0 += "\n"
+                            _key0 = _ser0.load_pem_private_key(_pem0.encode("utf-8"), password=None)
+                            _uri0 = f"POST api.cdp.coinbase.com{_url_path(fac['url'])}/settle"
+                            _now0 = int(_t0.time())
+                            _jwt0 = _j0.encode(
+                                {"iss": "cdp", "nbf": _now0, "exp": _now0 + 120,
+                                 "sub": CDP_API_KEY_ID.strip(), "uri": _uri0},
+                                _key0, algorithm="ES256",
+                                headers={"kid": CDP_API_KEY_ID.strip(), "nonce": _sec0.token_hex(16), "typ": "JWT"},
+                            )
+                            settle_headers_main["Authorization"] = f"Bearer {_jwt0}"
+                        except Exception as _je0:
+                            print(f"TrustBoost CDP settle (main) JWT failed: {_je0}")
                     for _attempt in range(2):
                         try:
                             async with _httpx_pc.AsyncClient(timeout=10.0) as sc:
                                 sresp = await sc.post(
                                     f"{fac['url']}/settle",
                                     json=verify_body,
-                                    headers=headers,
+                                    headers=settle_headers_main,
                                 )
                             if sresp.status_code == 200:
                                 settle_ok = True
