@@ -1699,8 +1699,11 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None) -> tupl
                     try:
                         import secrets as _secrets, time as _time, jwt as _jwt
                         _pem = CDP_API_KEY_SECRET.strip()
-                        # Detecta el tipo de key por el HEADER del PEM (infalible,
-                        # no requiere parsear la key). CDP acepta EC (ES256) o RSA (RS256).
+                        # Normaliza saltos de linea literales (\n) a reales, por si la
+                        # env var llega con backslash-n en vez de newline real.
+                        _pem = _pem.replace("\\n", "\n")
+                        # Detecta el tipo de key por el HEADER del PEM (infalible).
+                        # CDP acepta EC (ES256) o RSA (RS256).
                         _is_ec = "EC PRIVATE KEY" in _pem or "EC PRIVATE" in _pem
                         _algo = "ES256" if _is_ec else "RS256"
                         _uri = f"POST api.cdp.coinbase.com{_url_path(fac['url'])}"
