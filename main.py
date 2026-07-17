@@ -1729,6 +1729,15 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None, resourc
                 if resp.status_code == 200 and resp.json().get("isValid", False):
                     payer = payment_payload.get("payload", {}).get("authorization", {}).get("from", "")
                     settle_ok = False
+                else:
+                    # CDP /verify rechazó el pago -> log para debug (VeraData hace esto)
+                    try:
+                        _cdp_body = resp.json()
+                    except Exception:
+                        _cdp_body = resp.text[:200]
+                    print(f"TrustBoost CDP verify FAILED: {resp.status_code} {_cdp_body}")
+                    if fac["name"] == "cdp":
+                        continue  # no usar fallback payai si CDP es el facilitador primario y falló validate
                     last_err = ""
                     for _attempt in range(2):
                         try:
