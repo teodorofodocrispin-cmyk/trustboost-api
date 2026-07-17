@@ -1620,6 +1620,7 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None, resourc
 
     # Detect which network the client signed for
     client_network = payment_payload.get("network", "")
+    print(f"[DIAG] payment_payload keys={list(payment_payload.keys())} network={client_network!r}")
 
     NETWORK_CONFIGS = {
         "eip155:8453": {
@@ -1686,6 +1687,7 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None, resourc
             "paymentPayload": full_payload,
             "paymentRequirements": requirements,
         }
+        print(f"[DIAG] network={network} verify_body={json.dumps(verify_body)[:800]}")
 
         # Facilitators: CDP primero (indexa en el Bazaar de agentic.market),
         # PayAI como fallback. Replica el setup de VeraData/Intelica.
