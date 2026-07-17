@@ -1698,14 +1698,11 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None) -> tupl
                 if fac["auth"] == "cdp":
                     try:
                         import secrets as _secrets, time as _time, jwt as _jwt
-                        from cryptography.hazmat.primitives.serialization import load_pem_private_key
-                        _pem = CDP_API_KEY_SECRET.strip().replace("\\n", "\n")
-                        # Detecta EC vs RSA y elige el algoritmo correcto (ES256/RS256)
-                        try:
-                            _key = load_pem_private_key(_pem.encode(), password=None)
-                            _algo = "ES256" if _key.__class__.__name__.startswith("EC") else "RS256"
-                        except Exception:
-                            _algo = "RS256"  # fallback por si cryptography no carga
+                        _pem = CDP_API_KEY_SECRET.strip()
+                        # Detecta el tipo de key por el HEADER del PEM (infalible,
+                        # no requiere parsear la key). CDP acepta EC (ES256) o RSA (RS256).
+                        _is_ec = "EC PRIVATE KEY" in _pem or "EC PRIVATE" in _pem
+                        _algo = "ES256" if _is_ec else "RS256"
                         _uri = f"POST api.cdp.coinbase.com{_url_path(fac['url'])}"
                         _now = int(_time.time())
                         _jwt = _jwt.encode(
