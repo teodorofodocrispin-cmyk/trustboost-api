@@ -1688,15 +1688,29 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None) -> tupl
                 )
             if resp.status_code == 200 and resp.json().get("isValid", False):
                 payer = payment_payload.get("payload", {}).get("authorization", {}).get("from", "")
-                try:
-                    async with _httpx_pc.AsyncClient(timeout=10.0) as sc:
-                        await sc.post(
-                            f"{PAYAI_FACILITATOR_URL}/settle",
-                            json=verify_body,
-                            headers={"Content-Type": "application/json"},
-                        )
-                except Exception as se:
-                    print(f"TrustBoost settle error (non-fatal): {se}")
+                # Settle con reintento y errores EXPLICITOS (no tragados). El Bazaar
+                # indexa solo si el facilitador registra el settle on-chain.
+                settle_ok = False
+                last_err = ""
+                for _attempt in range(2):
+                    try:
+                        async with _httpx_pc.AsyncClient(timeout=10.0) as sc:
+                            sresp = await sc.post(
+                                f"{PAYAI_FACILITATOR_URL}/settle",
+                                json=verify_body,
+                                headers={"Content-Type": "application/json"},
+                            )
+                        if sresp.status_code == 200:
+                            settle_ok = True
+                            break
+                        last_err = f"HTTP {sresp.status_code}: {sresp.text[:200]}"
+                    except Exception as se:
+                        last_err = f"{type(se).__name__}: {str(se)[:200]}"
+                    print(f"TrustBoost settle attempt {_attempt+1} failed: {last_err}")
+                if not settle_ok:
+                    print(f"TrustBoost settle FAILED after retries: {last_err}")
+                else:
+                    print(f"TrustBoost settle OK (payer={payer})")
                 return True, payer
         except Exception as e:
             print(f"TrustBoost verify error on {network}: {e}")
