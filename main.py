@@ -70,6 +70,8 @@ PAYAI_FACILITATOR_URL  = os.getenv("PAYAI_FACILITATOR_URL", "https://facilitator
 CDP_FACILITATOR_URL   = os.getenv("CDP_FACILITATOR_URL", "https://api.cdp.coinbase.com/platform/v2/x402")
 CDP_API_KEY_ID        = os.getenv("CDP_API_KEY_ID", "").strip()
 CDP_API_KEY_SECRET    = os.getenv("CDP_API_KEY_SECRET", "")
+# DIAG (temporal): confirmar que las env vars CDP llegan al runtime.
+print(f"[DIAG] CDP_API_KEY_ID present: {bool(CDP_API_KEY_ID)}, CDP_API_KEY_SECRET present: {bool(CDP_API_KEY_SECRET)}")
 FLUXA_PROXY_SECRET     = os.getenv("FLUXA_PROXY_SECRET", "")  # aditivo: reconoce llamadas ya cobradas/liquidadas por FluxA Monetize
 WALLET_BASE             = os.getenv("WALLET_BASE", "0xCf1d31020A7915421f6d66B9835Dcb6f422337E7")  # shared wallet, same as VeraData/Intelica
 USDC_BASE_CONTRACT      = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
