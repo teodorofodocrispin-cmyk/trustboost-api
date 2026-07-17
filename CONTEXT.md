@@ -578,6 +578,29 @@ Wallet minera: `0xd6D31e09bD839A9883f9f99B72704E7C8837C669`.
 | Intelica | 59088 | https://api.intelica.dev/.well-known/agent-card.json |
 | TrustBoost | 59089 | https://api.trustboost.dev/.well-known/erc8004-agent.json |
 
+---
+
+## Sesión 2026-07-17 — Dificultad para indexar TrustBoost en agentic.market (CDP Bazaar)
+
+### Estado: NO RESUELTO (pago real devuelve 402, CDP /verify responde 401)
+
+VeraData e Intelica SÍ aparecen en agentic.market (CDP Bazaar). TrustBoost no, pese a ~14 pagos reales de $0.01 USDC.
+
+### Causas corregidas en el código (commits del día)
+1. Facilitador: TrustBoost usaba solo PayAI. Se agregó CDP como primario (mismo patrón que VeraData/Intelica).
+2. Key CDP: se agregó `cryptography` + detección EC→ES256; luego se carga la key con `load_pem_private_key` y se pasa el objeto a `jwt.encode` (replica `_build_cdp_jwt` de VeraData).
+3. URI del JWT: se corrigió a `POST api.cdp.coinbase.com/platform/v2/x402/verify` (antes faltaba `/verify` → uri mismatch → 401).
+4. Settle CDP: ahora lleva `resource.url` + `extensions.bazaar` en el paymentPayload (el Bazaar indexa por eso, no por verify solo).
+
+### Causa raíz aún abierta
+El log dice `TrustBoost CDP verify FAILED: 401 Unauthorized` tras todos los fixes. Las credenciales `CDP_API_KEY_ID`/`CDP_API_KEY_SECRET` en TrustBoost son **idénticas** a las de VeraData (confirmado por el usuario). El código replica a VeraData. Posible causa pendiente: **la API key CDP no tiene habilitado el scope del x402 Facilitator en el proyecto CDP**, o el facilitador valida el dominio/origen del server. VeraData/Intelica se indexaron con esa key, pero puede haber un paso adicional no documentado (registro de dominio en CDP, o la key fue creada con scope x402 para el proyecto de VeraData).
+
+### Siguiente paso (pendiente)
+- Verificar en cdp.coinbase.com si la API key tiene habilitado x402 Facilitator.
+- Si el scope es el problema: crear key específica para TrustBoost o habilitar el scope.
+- Reintentar pago y confirmar `TrustBoost settle OK via cdp` + `CDP Bazaar settle: 200`.
+- Nota: los pagos caen a veces en instancias viejas de Render; hacer "Clear build cache & deploy" antes de cada reintento.
+
 ### Por qué importa
 ERC-8004 es la capa de identidad/confianza del agent economy. Al registrar TrustBoost en el Identity
 Registry de Base, su prueba de redacción PII es verificable y descubrible on-chain por cualquier agente,
