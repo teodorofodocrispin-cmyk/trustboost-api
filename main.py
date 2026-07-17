@@ -1732,7 +1732,101 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None, resourc
                     )
                 if resp.status_code == 200 and resp.json().get("isValid", False):
                     payer = payment_payload.get("payload", {}).get("authorization", {}).get("from", "")
+                    # FIX (aditivo): antes, un verify exitoso nunca llamaba a /settle -- la
+                    # logica de settle (con reintentos + extension bazaar) solo estaba
+                    # dentro del camino de verify FALLIDO, y ademas ahi mismo se saltaba
+                    # para CDP con un "continue" -- o sea, CDP nunca liquidaba nada, ni
+                    # siquiera cuando el pago era 100% valido. Se agrega aqui el settle
+                    # real tras un verify exitoso, replicando la misma logica ya probada.
                     settle_ok = False
+                    last_err = ""
+                    for _attempt in range(2):
+                        try:
+                            async with _httpx_pc.AsyncClient(timeout=10.0) as sc:
+                                sresp = await sc.post(
+                                    f"{fac['url']}/settle",
+                                    json=verify_body,
+                                    headers=headers,
+                                )
+                            if sresp.status_code == 200:
+                                settle_ok = True
+                                # CDP Bazaar indexing: el settle debe llevar resource.url +
+                                # extensions.bazaar en el paymentPayload (no solo verify).
+                                if fac["auth"] == "cdp" and resource_url:
+                                    try:
+                                        _bazaar_ext = {
+                                            "bazaar": {
+                                                "info": {
+                                                    "input": {"type": "http", "method": "POST",
+                                                              "example": {"text": "Mi cedula es 12345678"}},
+                                                    "output": {"type": "json",
+                                                               "example": {"sanitized_content": "Mi cedula es [REDACTED]",
+                                                                           "entities_removed": True}},
+                                                },
+                                                "schema": {
+                                                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                                                    "type": "object",
+                                                    "properties": {
+                                                        "input": {"type": "object",
+                                                                  "properties": {"type": {"type": "string", "const": "http"},
+                                                                                 "method": {"type": "string", "enum": ["POST"]}},
+                                                                  "required": ["type", "method"]},
+                                                        "output": {"type": "object",
+                                                                   "properties": {"type": {"type": "string"}},
+                                                                   "required": ["type"]},
+                                                    },
+                                                    "required": ["input"],
+                                                },
+                                            }
+                                        }
+                                        _full_payload_with_resource = {
+                                            **full_payload,
+                                            "resource": {"url": resource_url},
+                                            "extensions": _bazaar_ext,
+                                        }
+                                        _settle_body_bazaar = {
+                                            "x402Version": 2,
+                                            "paymentPayload": _full_payload_with_resource,
+                                            "paymentRequirements": requirements,
+                                        }
+                                        _settle_headers = {"Content-Type": "application/json"}
+                                        try:
+                                            import secrets as _sec2, time as _t2, jwt as _j2
+                                            from cryptography.hazmat.primitives import serialization as _ser2
+                                            _pem2 = CDP_API_KEY_SECRET.strip().replace("\\n", "\n")
+                                            if not _pem2.endswith("\n"):
+                                                _pem2 += "\n"
+                                            _key2 = _ser2.load_pem_private_key(_pem2.encode("utf-8"), password=None)
+                                            _uri2 = f"POST api.cdp.coinbase.com{_url_path(fac['url'])}/settle"
+                                            _now2 = int(_t2.time())
+                                            _jwt2 = _j2.encode(
+                                                {"iss": "cdp", "nbf": _now2, "exp": _now2 + 120,
+                                                 "sub": CDP_API_KEY_ID.strip(), "uri": _uri2},
+                                                _key2, algorithm="ES256",
+                                                headers={"kid": CDP_API_KEY_ID.strip(), "nonce": _sec2.token_hex(16), "typ": "JWT"},
+                                            )
+                                            _settle_headers["Authorization"] = f"Bearer {_jwt2}"
+                                        except Exception as _je2:
+                                            print(f"TrustBoost CDP settle JWT failed: {_je2}")
+                                        async with _httpx_pc.AsyncClient(timeout=10.0) as sc2:
+                                            sresp2 = await sc2.post(
+                                                f"{fac['url']}/settle",
+                                                json=_settle_body_bazaar,
+                                                headers=_settle_headers,
+                                            )
+                                        print(f"TrustBoost CDP Bazaar settle: {sresp2.status_code} {sresp2.text[:120]}")
+                                    except Exception as _be:
+                                        print(f"TrustBoost CDP Bazaar settle error (non-fatal): {_be}")
+                                break
+                            last_err = f"HTTP {sresp.status_code}: {sresp.text[:200]}"
+                        except Exception as se:
+                            last_err = f"{type(se).__name__}: {str(se)[:200]}"
+                        print(f"TrustBoost settle ({fac['name']}) attempt {_attempt+1} failed: {last_err}")
+                    if not settle_ok:
+                        print(f"TrustBoost settle ({fac['name']}) FAILED after verify OK: {last_err}")
+                        continue
+                    print(f"TrustBoost settle OK via {fac['name']} (payer={payer})")
+                    return True, payer
                 else:
                     # CDP /verify rechazó el pago -> log para debug (VeraData hace esto)
                     try:
