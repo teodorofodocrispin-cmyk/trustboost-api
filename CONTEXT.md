@@ -606,3 +606,115 @@ ERC-8004 es la capa de identidad/confianza del agent economy. Al registrar Trust
 Registry de Base, su prueba de redacción PII es verificable y descubrible on-chain por cualquier agente,
 sin Google Agent Registry/GCP. La on-chain proof por call ya es el validation artifact del estándar.
 
+
+---
+
+## Sesión 2026-07-17 (parte 2) — Causa raíz del 401 encontrada y resuelta
+
+### Diagnóstico correcto: root cause NO era el código
+
+La sesión anterior del mismo día (documentada arriba) había replicado correctamente
+los 4 fixes que resolvieron este mismo problema en VeraData/Intelica (jun 28), pero
+seguía dando `401 Unauthorized`. Se comparó línea por línea `_build_cdp_jwt` de
+VeraData contra la réplica inline de TrustBoost — estructuralmente idénticas.
+Conclusión: el código estaba bien: la causa era el **valor de `CDP_API_KEY_SECRET`
+en Render**.
+
+### Causa raíz confirmada
+
+El PEM guardado en la env var de Render terminaba en:
+```
+-----END EC PRIVATE KEY-----n
+```
+con una **`n` literal pegada** en vez de un salto de línea real — artefacto de un
+copy/paste anterior. La key ECDSA en sí es correcta (confirmado: es una key de
+Coinbase Advanced Trade / CDP con algoritmo ECDSA, compartida con VeraData/Intelica,
+compatible con el `algorithm="ES256"` que usa el código — no hacía falta rotarla).
+
+### Verificación aislada (sin pago real, sin tocar el código de producción)
+
+Se escribió un script standalone (`test_cdp_auth.py`) que arma el mismo JWT que
+`_build_cdp_jwt` y le pega directo a `POST /platform/v2/x402/verify` con un body
+inventado:
+
+```
+ANTES del fix:  STATUS 401 Unauthorized
+DESPUÉS del fix (corrigiendo el "n" suelto en Render): STATUS 400
+  {"errorMessage": "'paymentPayload' is invalid: must match one of [...] requires 'signature', 'transaction'"}
+```
+
+**El salto de 401 a 400 confirma sin ambigüedad que la causa raíz real del bloqueo
+de indexación en agentic.market/CDP Bazaar está resuelta.** Un 400 es CDP quejándose
+del *contenido* del payload (esperado, era un body de prueba) — nunca más rechaza
+la credencial en sí.
+
+### Instrumentación temporal agregada (pendiente remover)
+
+Commit `4720acf` — 2 líneas de `print()` diagnóstico en el bloque de verificación
+de `/sanitize` (no en `/sanitize/quick`):
+```python
+print(f"[DIAG] payment_payload keys={list(payment_payload.keys())} network={client_network!r}")
+print(f"[DIAG] network={network} verify_body={json.dumps(verify_body)[:800]}")
+```
+**Recordatorio: remover estos 2 prints en la próxima sesión de limpieza** — son
+puramente de diagnóstico, no rompen nada pero no deben quedar permanentes.
+
+### Intento de pago real de punta a punta — no concluyente, pero con hallazgo valioso
+
+Se intentó completar un pago x402 real firmado (EIP-3009 sobre USDC en Base) contra
+`/sanitize` para confirmar el settle completo + indexación en Bazaar, usando 3
+variantes de un script Python casero (firma manual con `eth_account` +
+`encode_typed_data`):
+
+| Intento | Error de CDP |
+|---|---|
+| v1 (accepted anidado) | `preflight_validation_failed` + `missing_fee_payer` (Solana, red no solicitada) |
+| v2 (`scheme`/`network` al nivel raíz) | mismos dos errores — logs no concluyentes sobre si realmente cambió algo |
+| v3 (`validAfter`/`validBefore` como enteros, no strings) | `preflight_validation_failed` con detalle nuevo: `schema requires 'permit2Authorization', 'transaction'` |
+
+**Conclusión de estos 3 intentos:** el schema exacto que exige CDP v2 para el
+scheme "exact" no está completamente inferido — cada iteración se acercó pero
+ninguna cerró. No vale la pena seguir iterando a mano.
+
+### Hallazgo clave — el ecosistema x402 todavía no soporta v2/CAIP-2 de forma uniforme
+
+Se probó con la librería oficial **`x402-fetch`** (Coinbase, la misma que usan
+guías oficiales de CDP) + `viem`, en vez de seguir firmando a mano. Resultado:
+**crash del lado del cliente, antes de firmar nada:**
+
+```
+ZodError: Invalid enum value. Expected 'abstract'|'base-sepolia'|'base'|...
+  received 'eip155:8453'
+  (+ maxAmountRequired, resource, description, mimeType: todos "Required")
+```
+
+`x402-fetch` (al menos en la versión resuelta por npm hoy) todavía valida contra
+el schema **x402 v1** (network como string plano `"base"`, `maxAmountRequired`,
+`resource` como string) — no reconoce el formato **v2/CAIP-2** que sirve
+TrustBoost (`"network": "eip155:8453"`, `"amount"`, `resource` como objeto
+`{url, description, mimeType}`). Esto confirma: **TrustBoost está correctamente
+en v2 (igual que VeraData/Intelica)** — el hueco es del lado de las librerías
+cliente del ecosistema, no de nuestro servidor.
+
+### Estado final de la sesión
+
+| Ítem | Estado |
+|---|---|
+| Causa raíz del `401` (secret corrupto en Render) | ✅ RESUELTO, verificado aislado |
+| Fixes de código de la sesión anterior (facilitador CDP, JWT, uri, bazaar en settle) | ✅ Correctos, no había que tocarlos |
+| Pago real de punta a punta vía `/sanitize` (firma manual) | ⏳ No concluyente — schema exacto de CDP v2 no inferido del todo |
+| Confirmación de indexación en Bazaar | ⏳ Pendiente de tráfico real con cliente v2-compatible |
+| Prints de diagnóstico (`[DIAG]`) | ⚠️ Remover en próxima sesión |
+
+### Próximo paso recomendado
+
+No seguir reconstruyendo el payload a mano. Las opciones más prometedoras, en orden:
+1. Esperar tráfico orgánico real — cualquier agente con un cliente x402 v2 correctamente
+   implementado debería completar el pago solo, ahora que la auth con CDP funciona.
+2. Revisar si `agentcash` (que sí sabe hablar v2/CAIP-2, confirmado en sesiones
+   anteriores con VeraData/Intelica) puede aislar mejor el problema — los 2 intentos
+   de hoy con `agentcash:fetch` no generaron líneas de log correlacionables con
+   certeza, vale la pena repetir con logging `[DIAG]` ya desplegado la próxima vez.
+3. Contactar al mantenedor de `x402-fetch` (o el paquete `x402` del que depende,
+   que trae el schema Zod) señalando el gap v1/v2 — mismo tipo de intercambio
+   técnico público que ya funcionó bien con ANP2 Network en VeraData.
