@@ -718,3 +718,104 @@ No seguir reconstruyendo el payload a mano. Las opciones más prometedoras, en o
 3. Contactar al mantenedor de `x402-fetch` (o el paquete `x402` del que depende,
    que trae el schema Zod) señalando el gap v1/v2 — mismo tipo de intercambio
    técnico público que ya funcionó bien con ANP2 Network en VeraData.
+
+---
+
+## Sesión 2026-07-17 (parte 3) — RESUELTO: TrustBoost indexado en CDP Bazaar
+
+### Estado final: ÉXITO — pago real de punta a punta confirmado
+
+Continuación directa de la parte 2. Con la causa raíz del `401` ya resuelta,
+se probó un pago real y completo con `agentcash:fetch` (cliente x402 v2
+correctamente implementado) contra `POST /sanitize` en Base mainnet. El primer
+intento reveló 3 bugs adicionales, encontrados y corregidos en cadena el mismo
+día:
+
+### Bug 2 — Verify exitoso nunca llamaba a `/settle`
+
+El handler tenía un `if isValid: ... settle_ok = False` (sin llamar nunca a
+`/settle`) y un `else: ... (intenta settle, pero solo para PayAI, CDP hace
+`continue` antes)`. O sea: **un pago 100% válido según CDP nunca se liquidaba**.
+Fix: se agregó la llamada real a `/settle` (con reintentos) dentro del camino
+de éxito, sin tocar el camino de fallo existente.
+
+**Commit:** `8fbc48a`
+
+### Bug 3 — `/settle` reutilizaba el JWT de `/verify`
+
+CDP exige un JWT distinto por endpoint (el claim `uri` debe matchear el path
+exacto: `.../verify` vs `.../settle`). El primer intento del fix anterior
+reusó el JWT de `/verify` para `/settle` → `401 Unauthorized` en el settle,
+forzando un fallback silencioso a PayAI (el pago se liquidaba, pero por la
+vía equivocada — sin la extensión Bazaar, sin indexar nada).
+
+**Fix:** construir un JWT propio con `uri` terminado en `/settle` antes de esa
+llamada. **Commit:** `9a53a2c`
+
+### Bug 4 — Doble llamada a `/settle` con el mismo nonce
+
+Tras el fix anterior, el settle principal pasó (`settle OK via cdp`), pero la
+llamada *adicional* con la extensión `bazaar` (pensada para indexar en Bazaar)
+fallaba: `400 "authorization nonce already submitted; transaction already
+on-chain"`. Un nonce EIP-3009 solo puede liquidarse **una vez** — la blockchain
+ya había marcado la autorización como usada en el primer settle.
+
+**Fix:** armar el payload con `resource` + `extensions.bazaar` **antes** de la
+única llamada a `/settle`, en vez de hacer una segunda llamada separada con el
+mismo nonce. **Commit:** `5a700ff`
+
+### Validación final en producción (agentcash, pago real, Base mainnet)
+
+```
+POST /sanitize -> 200 OK
+  "status": "success"
+  "sanitized_content": "Mi cedula es [REDACTED] y mi correo es [REDACTED]"
+  "billing": {"license_type": "Pay-per-call (x402)", "status": "active"}
+
+Log de Render:
+  TrustBoost settle OK via cdp (payer=0xe4Aedc36D9...)
+  TrustBoost CDP Bazaar settle: 200 EXTENSION-RESPONSES=eyJiYXphYXIiOnsic3RhdHVzIjoicHJvY2Vzc2luZyJ9fQ==
+  (decodificado: {"bazaar":{"status":"processing"}})
+```
+
+Misma respuesta `{"bazaar":{"status":"processing"}}` documentada el 28 de
+junio para el milestone original de Intelica en Bazaar — señal de que la
+indexación debería completarse en ~5 minutos.
+
+### Limpieza
+
+Los 2 `print("[DIAG] ...")` agregados en la parte 2 para diagnosticar esto ya
+se removieron (no aportan valor permanente). Queda un tercer `[DIAG]` en el
+arranque del servidor (`CDP_API_KEY_ID present/CDP_API_KEY_SECRET present`)
+que ya existía de antes y no se tocó.
+
+### Hallazgo aparte, no resuelto (no bloqueante)
+
+```
+[Solana Anchor] Failed: argument 'blockhash': 'str' object cannot be converted to 'Hash'
+```
+Aparece en cada sanitización exitosa — parece ser la feature de anclaje de
+prueba inmutable en Solana (`anchor_proof_on_solana`) fallando por un tipo de
+dato incorrecto (`blockhash` como string en vez de objeto `Hash` de `solders`).
+No bloquea la respuesta 200 al cliente (no-fatal), pero significa que el
+"Proof of Sanitization on Solana" mencionado en la descripción pública del
+servicio probablemente no se está anclando de verdad en ninguna llamada
+reciente. Pendiente investigar en otra sesión — no es parte de la misión de
+indexación en Bazaar.
+
+### Estado de discovery agéntico — actualizado
+
+| Canal | Estado |
+|---|---|
+| CDP Bazaar | ✅ LIVE — settle confirmado, indexación en curso (~5 min) |
+| Agentic Market | ⏳ Debería aparecer en `agentic.market/services/api-trustboost-dev` poco después de Bazaar |
+| 402 Index | ✅ ya verificado (sesión previa) |
+
+### Lección metodológica del día
+
+Cuando algo "casi funciona" con múltiples hipótesis plausibles, instrumentar
+con `print()` de diagnóstico temporal (mostrando el payload real recibido y
+el body real enviado) fue mucho más eficiente que seguir adivinando la forma
+exacta del payload desde afuera — permitió ver en una sola vuelta que
+`client_network` nunca se detectaba (Bug 1 de esta parte) en vez de sospechar
+erróneamente del formato JSON del cliente.
