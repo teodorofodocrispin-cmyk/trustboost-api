@@ -819,3 +819,31 @@ el body real enviado) fue mucho más eficiente que seguir adivinando la forma
 exacta del payload desde afuera — permitió ver en una sola vuelta que
 `client_network` nunca se detectaba (Bug 1 de esta parte) en vez de sospechar
 erróneamente del formato JSON del cliente.
+
+---
+
+## Nota — Jul 19, 2026: PR #170 en ARUNAGIRINATHAN-K/awesome-ai-agents-2026
+
+PR abierto para agregar los 3 productos a este directorio (distinto al `caramaschiHG/awesome-ai-agents-2026`
+donde ya estaban listados desde antes — mismo nombre de repo, dueños distintos).
+
+**Origen:** el issue #118 (submission original de Intelica, 23 de junio) fue cerrado como "completed" por el
+maintainer el 19 de julio sin que el contenido realmente llegara al README — se abrió este PR directamente
+para cerrar el loop.
+
+**Contenido:** 3 líneas, formato ajustado a mano para calzar exacto con las entradas vecinas del archivo
+(`[Nombre](URL de GitHub)` + tags al final entre parentesis con 🏷️, sin emoji ni URL de API al inicio):
+- Intelica -> seccion "Agent Tooling and Infrastructure"
+- TrustBoost -> seccion "Agent Tooling and Infrastructure"
+- VeraData -> seccion "AI Governance and Compliance" (la descripcion de esa seccion menciona explicitamente
+  el EU AI Act ago-2026 -- encaje perfecto)
+
+**Nota tecnica del proceso:** el primer PR se abrio por error contra el propio fork del usuario (no contra
+el repo original) -- error comun del flujo "Create a new branch and start a pull request" de GitHub cuando
+el nombre del fork difiere del original. Se corrigio abriendo un nuevo PR via "compare across forks"
+explicito. El fine-grained PAT de este proyecto no puede forkear ni comentar en repos ajenos (misma
+limitacion ya documentada en sesiones anteriores) -- todo el proceso de fork/PR se hizo manualmente desde
+el navegador.
+
+PR: https://github.com/ARUNAGIRINATHAN-K/awesome-ai-agents-2026/pull/170
+
