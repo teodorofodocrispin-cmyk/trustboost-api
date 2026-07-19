@@ -847,3 +847,28 @@ el navegador.
 
 PR: https://github.com/ARUNAGIRINATHAN-K/awesome-ai-agents-2026/pull/170
 
+
+### Actualización — PR #170: revisión automática (CodeRabbit + Gemini Code Assist)
+
+Tras abrir el PR, dos bots de revisión (CodeRabbit, Gemini Code Assist) marcaron 2 reclamos
+como no verificables desde los repos publicos linkeados en la entrada:
+
+1. **Intelica** — "benchmarked against 3,600+ companies" — el numero es real (3,846 nodos en
+   `intel_graph_nodes` al momento de escribir esto), pero `Intelica-docs/README.md` nunca lo
+   documenta como cifra estatica (solo dice "accumulated competitive relationship map across
+   all analyses", sin numero). Fix: se saco la cifra especifica de la entrada.
+
+2. **VeraData** — "independently-verified hash chain" — la cadena de hashes y su verificacion
+   externa (ANP2 Network, babyblueviper1/ERC-8299) son reales y estan documentadas en sesiones
+   anteriores, pero `veradata-public/README.md` solo muestra el campo `audit_hash`, no la cadena
+   completa ni la verificacion. Fix: se cambio a "EU AI Act compliant audit hash on every
+   response" — lo que el repo linkeado si respalda.
+
+**Leccion:** para PRs a directorios de terceros, las afirmaciones deben poder verificarse desde
+el link que se provee en la entrada especifica, no desde el conocimiento interno completo del
+producto. Ambos claims eran ciertos, pero no verificables desde esa fuente puntual — hay que
+matchear la afirmacion a lo que el link realmente muestra, o agregar la evidencia publica antes
+de reclamarlo.
+
+PR (actualizado): https://github.com/ARUNAGIRINATHAN-K/awesome-ai-agents-2026/pull/170
+
