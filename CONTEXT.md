@@ -872,3 +872,142 @@ de reclamarlo.
 
 PR (actualizado): https://github.com/ARUNAGIRINATHAN-K/awesome-ai-agents-2026/pull/170
 
+
+## Session — Aug 28-29, 2026 — Auditoría cruzada tras feedback de NirDiamant en un tutorial de terceros
+
+**Nota de alcance, importante**: este trabajo se originó revisando un PR de
+terceros (`NirDiamant/agents-towards-production#60`, un tutorial de PII
+usando TrustBoost como implementación de referencia) -- no de un cambio de
+producto propio. Se documenta aquí, en `trustboost-api/CONTEXT.md`, y no en
+el registro de Sentinel Oracle, porque son dos proyectos separados de Iv --
+Sentinel Oracle es un oráculo de confianza x402 completamente distinto,
+sin relación de código con TrustBoost. Parte de este trabajo se había
+documentado por error en el archivo de estado de Sentinel Oracle en las
+sesiones del 28-29 de agosto; queda corregido aquí, en el lugar correcto,
+de ahora en adelante.
+
+### Parte 1 — `TrustBoost-PII-Sanitizer` (repo de documentación/marketing): contradicción real encontrada y corregida
+
+Auditoría quirúrgica pedida por Iv encontró una contradicción directa
+dentro del propio repo: `README.md`, tabla "Trust Model", afirmaba *"What
+TrustBoost never does: Share data with third parties"* -- mientras
+`PRIVACY.md`, en el mismo repo, documenta que el texto se envía a OpenAI
+GPT-4o-mini para la detección semántica. `SKILL.md` ya tenía la divulgación
+honesta correcta; el README no.
+
+**Fix**: commit `e05eb9d` en `TrustBoost-PII-Sanitizer` -- tabla corregida,
+divulgación completa agregada (mismo texto que ya tenía `SKILL.md`),
+referencia cruzada a `PRIVACY.md`. Hallazgos adicionales señalados pero no
+corregidos (fuera del alcance pedido): las métricas "Precision 1.000/Recall
+1.000" del benchmark vienen de 34 casos de prueba deliberadamente fáciles;
+el archivo "Digital Consciousness Manifesto" tiene un tono que contrasta
+con el resto de la documentación técnica.
+
+### Parte 2 — Tres rondas de revisión real en `NirDiamant/agents-towards-production#60`
+
+El PR de Iv (tutorial de PII, abierto desde el 29 de julio, usando
+TrustBoost como Approach 2 opt-in junto a un Approach 1 regex/local) recibió
+revisión sustantiva real de `NirDiamant` (dueño del repo, 21,300 estrellas)
+el 28 de agosto -- "holding, not rejecting" -- más tres rondas subsecuentes
+de revisión automática de CodeRabbit tras cada fix. Cronología completa:
+
+**Ronda 1 (feedback de NirDiamant + primer fix, commit `a4dd9ba`)**:
+objeción de fondo -- el tutorial mandaba texto crudo a TrustBoost sin
+divulgar el salto adicional a OpenAI, ni explicar qué se retiene y dónde.
+Reencuadre completo: regex como default explícito, TrustBoost como opt-in
+con divulgación total (texto crudo → TrustBoost → OpenAI). Se agregó
+`assets/data-flow-comparison.svg` (diagrama de flujo de datos, validado
+como XML antes de comitear), `requirements.txt`, entrada en el índice del
+README raíz bajo Security. **Hallazgo adicional**: el fix de manejo de
+errores que Iv le había dicho a CodeRabbit el 15 de mayo que ya existía
+("Added fail-closed error handling in trustboost_sanitize") nunca se había
+aplicado de verdad al commit real -- verificado contra el diff, corregido
+en esta misma pasada.
+
+**Ronda 2 (8 hallazgos de CodeRabbit, commit `22c8b96`)**: incluyó una
+autocorrección real -- la propia divulgación de la Ronda 1 ("neither
+service stores the raw text") era demasiado amplia; CodeRabbit verificó con
+búsqueda web que OpenAI retiene prompts/respuestas en logs de monitoreo de
+abuso hasta 30 días por defecto (salvo aprobación ZDR/MAM), algo distinto a
+si TrustBoost mismo almacena algo. Corregido distinguiendo ambos
+explícitamente. Además: el ejemplo insignia del propio tutorial
+(`+1-555-0123`) no coincidía con su propio regex de teléfono (confirmado
+con Python real antes de arreglar); `create_privacy_aware_agent` llamaba a
+TrustBoost sin condición, contradiciendo "regex es el default" -- corregido
+con un parámetro `sanitizer` con default local; `should_block` en la
+sección de LangGraph tenía el mismo problema de lista negra vs blanca que
+se corrigió en Sentinel Oracle el 19 de agosto (patrón repetido,
+reconocido); import obsoleto de LangChain confirmado roto contra la versión
+1.3.18 real antes de corregir. 14 casos de prueba ejecutados.
+
+**Ronda 3 (4 hallazgos más, commit `e69cfb7`)**: bug real confirmado con
+repro directo -- `trustboost_sanitize()` nunca validaba que el JSON de
+nivel superior fuera un `dict` antes de llamar `.get('data')` (una lista o
+string JSON válido rompía con `AttributeError` no capturado). Contradicción
+real encontrada en el propio docstring de `should_block` (decía que
+`PRIVATE` bloqueaba, el código real lo dejaba pasar -- el código estaba
+bien, el comentario estaba mal). **Autocorrección de una autocorrección**:
+las fechas del EU AI Act de la Ronda 2 ("agosto 2027") también eran
+imprecisas -- investigación fresca confirmó, con múltiples fuentes de
+calidad (Gibson Dunn, Cloud Security Alliance, el servicio oficial de la
+Comisión Europea), que el "Digital Omnibus on AI" (en vigor desde el 27 de
+julio de 2026) aplazó Annex III a diciembre 2, 2027 y Annex I a agosto 2,
+2028 -- no agosto 2027. Divulgación agregada sobre `wallet_id` como
+identificador persistente enviado y almacenado por TrustBoost para control
+de cuota. 10 casos de prueba ejecutados.
+
+PR: https://github.com/NirDiamant/agents-towards-production/pull/60
+
+### Parte 3 — El fix que sí vive en este repo: `trustboost-api` nunca fallaba cerrado si la llamada a OpenAI fallaba
+
+Auditoría separada, pedida explícitamente por Iv tras notar que todo el
+trabajo de las Partes 1-2 fue del lado de cliente/documentación, nunca del
+servidor real. Lectura completa de `main.py` (3,968 líneas) confirmó que
+casi todo lo documentado coincide con la implementación real -- incluida
+una confirmación matemática de que `compute_score()` solo puede devolver
+`CRITICAL/PRIVATE/SENSITIVE/CLEAN` (conjunto cerrado, sin ningún camino de
+código que devuelva otra cosa), validando exactamente la lista blanca
+construida del lado cliente en el PR de NirDiamant.
+
+**El hallazgo real**: `gpt_sanitize()` llamaba directo a
+`openai_client.chat.completions.create(...)` sin ningún `try/except`.
+`_parse_model_json()` ya fallaba seguro ante una *respuesta* malformada de
+OpenAI, pero eso nunca corre si la *llamada misma* falla (rate limit,
+timeout, error de conexión, fallo de autenticación) -- sin manejador de
+excepciones global registrado en la app. Mitigado por casualidad, no por
+diseño: el manejo defensivo del lado cliente reforzado en la Parte 2 ya
+convertía un 500 del servidor en `CRITICAL`, pero el servidor mismo no
+tenía esa disciplina.
+
+**Fix (commit `07030d9`, desplegado y verificado sano en producción)**:
+extraído el diccionario de fail-safe (antes duplicado inline) a una función
+compartida `_failsafe_result()`, usada tanto por el fallback de JSON
+malformado como por el nuevo bloque `except` de `gpt_sanitize()` -- un solo
+lugar, misma forma, para que los dos caminos no puedan desincronizarse. 6
+casos de prueba nuevos agregados a `tests/test_sanitize.py` (ahora 24 en
+total), usando instancias reales de `openai.RateLimitError`/
+`APITimeoutError`/`APIConnectionError` construidas con objetos
+`httpx.Request`/`Response` reales, no mocks genéricos. Verificado
+`https://api.trustboost.dev/health` sano (`{"status":"ok","version":"2.6.0"}`)
+después del despliegue automático a Render.
+
+**Hallazgo de paso, no corregido**: la página pública raíz de la API
+(`api.trustboost.dev/`) repite las mismas dos imprecisiones ya corregidas
+en el tutorial ("F1=1.000" del mismo benchmark fácil; misma fecha
+simplificada del EU AI Act). Señalado a Iv, fuera del alcance de esta
+sesión.
+
+### Parte 4 — Resultado real: NirDiamant invita a conversación de colocación paga
+
+Tras las tres rondas de fixes reales, `NirDiamant` comentó de nuevo el 29
+de agosto, esta vez sin nada técnico: invitación directa a mensaje de
+LinkedIn para hablar de colocación paga de TrustBoost en el repo (21,300
+estrellas de audiencia real). Mensaje redactado por Claude (dos variantes,
+"directo y breve" vs "con más contexto de negocio"), revisado y **enviado
+por Iv mismo** el mismo día -- deliberadamente no ejecutado por Claude, al
+ser una negociación comercial personal, distinta a los comentarios técnicos
+de GitHub ya hechos con autorización explícita en sesiones anteriores.
+
+**Estado**: pendiente de respuesta de NirDiamant. Es el resultado más
+cercano a una conversación de ingreso real que ha producido cualquier
+trabajo de TrustBoost o Sentinel Oracle hasta la fecha.
