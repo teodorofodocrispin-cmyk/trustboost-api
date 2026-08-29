@@ -1010,4 +1010,4 @@ de GitHub ya hechos con autorización explícita en sesiones anteriores.
 
 **Estado**: pendiente de respuesta de NirDiamant. Es el resultado más
 cercano a una conversación de ingreso real que ha producido cualquier
-trabajo de TrustBoost o Sentinel Oracle hasta la fecha.
+trabajo de TrustBoost hasta la fecha.
