@@ -1294,6 +1294,28 @@ async def base_verify(tx_hash: str) -> tuple[bool, float]:
 
 
 # ── GPT-4o-mini: sanitización multilingüe + context-aware ──
+def _failsafe_result(original_text: str) -> dict:
+    """The one, single-source-of-truth failsafe shape: redact the entire
+    input as a single CRITICAL entity. Used by BOTH failure paths below --
+    a malformed/unparseable OpenAI response (_parse_model_json) and an
+    OpenAI API call that fails outright (gpt_sanitize's except block).
+    Extracted so the two paths can never drift apart the way the client-
+    side tutorial fix and this server had already drifted before this
+    audit (2026-08-28) -- one function, one shape, both callers.
+    """
+    return {
+        "status": "success",
+        "cleaned_text": "[REDACTED]",
+        "entities": [
+            {
+                "type": "sanitizer_failsafe",
+                "category": "CRITICAL",
+                "redacted_text": original_text,
+            }
+        ],
+    }
+
+
 async def gpt_sanitize(text: str, context: str = "general") -> dict:
     """Sanitize text using the context-specific system prompt.
 
@@ -1303,18 +1325,33 @@ async def gpt_sanitize(text: str, context: str = "general") -> dict:
     'general' (default), the addendum is empty and behavior is identical
     to v2.2. All other logic (enforce_redaction, scoring, failsafe) is
     unaffected.
+
+    Fase 5 (2026-08-28, found during a cross-repo audit of the client-side
+    tutorial fixes made the same day): the OpenAI call itself was never
+    wrapped in a try/except. `_parse_model_json` below already fails safe
+    on a malformed/garbage RESPONSE from OpenAI -- but a call that never
+    gets a response at all (rate limit, timeout, connection error, auth
+    failure) was previously unhandled and would 500 the whole request
+    instead of failing closed. Now both failure modes -- "OpenAI responded
+    with garbage" and "OpenAI never responded" -- produce the identical
+    failsafe shape via _failsafe_result(), so downstream handling (the
+    `is_failsafe` check in the /sanitize route) treats them the same way.
     """
     system_prompt = _build_system_prompt(context)
-    r = await openai_client.chat.completions.create(
-        model="gpt-4o-mini",
-        temperature=0,
-        max_tokens=1000,
-        response_format={"type": "json_object"},
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": text}
-        ]
-    )
+    try:
+        r = await openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            temperature=0,
+            max_tokens=1000,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": text}
+            ]
+        )
+    except Exception as e:
+        print(f"[gpt_sanitize] OpenAI call failed, failing closed: {type(e).__name__}: {str(e)[:150]}")
+        return _failsafe_result(text)
     raw = r.choices[0].message.content or ""
     return _parse_model_json(raw, original_text=text)
 
@@ -1342,17 +1379,7 @@ def _parse_model_json(raw: str, original_text: str) -> dict:
             return json.loads(raw[start:end + 1])
     except Exception:
         pass
-    return {
-        "status": "success",
-        "cleaned_text": "[REDACTED]",
-        "entities": [
-            {
-                "type": "sanitizer_failsafe",
-                "category": "CRITICAL",
-                "redacted_text": original_text,
-            }
-        ],
-    }
+    return _failsafe_result(original_text)
 
 
 # ── Server-side redaction enforcer ──────────────────────

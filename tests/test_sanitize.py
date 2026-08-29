@@ -214,3 +214,98 @@ def test_enforce_idempotent_duplicate_entities():
     cleaned, source, unmatched = main.enforce_redaction(original, original, entities)
     assert cleaned == "Email [REDACTED] and [REDACTED]"
     assert source == "server"
+
+
+# ── gpt_sanitize: fails closed when the OpenAI call itself fails ───────────
+# Found 2026-08-28 during a cross-repo audit prompted by client-side fixes
+# in a downstream tutorial: _parse_model_json already failed safe on a
+# malformed RESPONSE from OpenAI, but the API call itself was never wrapped
+# in a try/except -- a rate limit, timeout, connection error, or auth
+# failure would 500 the whole request instead of failing closed. These
+# tests exercise that path directly against the real openai exception
+# classes (not generic Exception), since the SDK's __init__ signatures
+# require a real httpx.Request/Response to construct.
+
+import asyncio
+from unittest.mock import AsyncMock, patch
+import openai
+import httpx
+
+_FAKE_REQUEST = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+_FAKE_RESPONSE = httpx.Response(429, request=_FAKE_REQUEST)
+
+
+def _run(coro):
+    return asyncio.run(coro)
+
+
+def test_gpt_sanitize_fails_closed_on_rate_limit():
+    with patch.object(
+        main.openai_client.chat.completions, "create",
+        new=AsyncMock(side_effect=openai.RateLimitError("rate limited", response=_FAKE_RESPONSE, body=None)),
+    ):
+        result = _run(main.gpt_sanitize("my email is john@example.com"))
+    assert result == main._failsafe_result("my email is john@example.com")
+    assert result["entities"][0]["category"] == "CRITICAL"
+
+
+def test_gpt_sanitize_fails_closed_on_timeout():
+    with patch.object(
+        main.openai_client.chat.completions, "create",
+        new=AsyncMock(side_effect=openai.APITimeoutError(request=_FAKE_REQUEST)),
+    ):
+        result = _run(main.gpt_sanitize("my SSN is 123-45-6789"))
+    assert result["entities"][0]["category"] == "CRITICAL"
+    assert result["entities"][0]["type"] == "sanitizer_failsafe"
+
+
+def test_gpt_sanitize_fails_closed_on_connection_error():
+    with patch.object(
+        main.openai_client.chat.completions, "create",
+        new=AsyncMock(side_effect=openai.APIConnectionError(request=_FAKE_REQUEST)),
+    ):
+        result = _run(main.gpt_sanitize("sensitive text"))
+    assert result["entities"][0]["category"] == "CRITICAL"
+
+
+def test_gpt_sanitize_fails_closed_on_unexpected_exception():
+    """Not just OpenAI's own exception classes -- ANY exception from the
+    call (a bug in the SDK, an unexpected error type) must still fail
+    closed rather than propagate into a raw 500."""
+    with patch.object(
+        main.openai_client.chat.completions, "create",
+        new=AsyncMock(side_effect=RuntimeError("totally unexpected")),
+    ):
+        result = _run(main.gpt_sanitize("text"))
+    assert result["entities"][0]["category"] == "CRITICAL"
+
+
+def test_gpt_sanitize_happy_path_unaffected():
+    """Regression: wrapping the call in try/except must not change behavior
+    when OpenAI responds normally."""
+    class _Msg:
+        content = '{"cleaned_text": "[REDACTED]", "entities": [{"type": "email", "category": "PRIVATE", "redacted_text": "john@example.com"}]}'
+
+    class _Choice:
+        message = _Msg()
+
+    class _Response:
+        choices = [_Choice()]
+
+    with patch.object(
+        main.openai_client.chat.completions, "create",
+        new=AsyncMock(return_value=_Response()),
+    ):
+        result = _run(main.gpt_sanitize("contact john@example.com"))
+    assert result["cleaned_text"] == "[REDACTED]"
+    assert result["entities"][0]["category"] == "PRIVATE"
+
+
+def test_parse_model_json_and_failsafe_result_share_one_shape():
+    """_parse_model_json's own failsafe branch and gpt_sanitize's except
+    block must never drift apart -- both call the same _failsafe_result()
+    helper, extracted specifically so a future edit to one can't silently
+    leave the other behind."""
+    from_parse = main._parse_model_json("not json {{{", "original text")
+    from_helper = main._failsafe_result("original text")
+    assert from_parse == from_helper
