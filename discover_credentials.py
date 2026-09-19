@@ -27,48 +27,76 @@ from urllib.parse import urljoin
 SUPABASE_URL_RE = re.compile(r"https://[a-z0-9]{15,25}\.supabase\.co")
 JWT_RE = re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}")
 SCRIPT_SRC_RE = re.compile(r'<script[^>]+src=["\']([^"\']+)["\']', re.IGNORECASE)
+PRELOAD_LINK_RE = re.compile(
+    r'<link[^>]+rel=["\'](?:modulepreload|preload)["\'][^>]*href=["\']([^"\']+\.js[^"\']*)["\']',
+    re.IGNORECASE
+)
 
-HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; TrustBoostResearch/1.0)"}
-MAX_SCRIPTS_TO_CHECK = 8
-MAX_FILE_SIZE = 3_000_000  # no descargar archivos de más de 3MB, no vale la pena
+# User-Agent real de Chrome — algunos sitios bloquean o sirven una página
+# distinta a "bots" con user-agents genéricos.
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+}
+MAX_SCRIPTS_TO_CHECK = 25
+MAX_FILE_SIZE = 8_000_000  # 8MB — los bundles de React/Vite sin comprimir pueden ser grandes
 
 
-def _extract_from_text(text: str):
-    url_match = SUPABASE_URL_RE.search(text)
-    key_match = JWT_RE.search(text)
-    if url_match and key_match:
-        return {"project_url": url_match.group(0), "anon_key": key_match.group(0)}
-    return None
+def _find_url(text: str):
+    m = SUPABASE_URL_RE.search(text)
+    return m.group(0) if m else None
+
+
+def _find_key(text: str):
+    m = JWT_RE.search(text)
+    return m.group(0) if m else None
 
 
 async def discover_supabase_credentials(homepage_url: str) -> dict | None:
     """
-    Devuelve {"project_url": ..., "anon_key": ...} si logra encontrarlos,
-    o None si esta app no expone Supabase de forma detectable (puede
-    usar otro backend, o cargar las credenciales de una forma que este
-    método simple no cubre — eso está bien, no todas las apps se van a
-    encontrar, y no es necesario para que el resto de la investigación
-    funcione).
+    Devuelve {"project_url": ..., "anon_key": ...} si logra encontrar AMBOS
+    datos (pueden venir de archivos distintos, no necesariamente juntos),
+    o None si esta app no expone Supabase de forma detectable con este
+    método liviano — algunas apps cargan sus credenciales en fragmentos de
+    código que solo aparecen después de ejecutar JavaScript en un
+    navegador real (React "code splitting"), lo cual este método no
+    reproduce. Eso está bien: no todas las apps se van a encontrar así,
+    y no es necesario para que el resto de la investigación funcione —
+    simplemente esas quedan como "not_found".
     """
+    found_url = None
+    found_key = None
+
     try:
-        async with httpx.AsyncClient(timeout=12, headers=HEADERS, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=15, headers=HEADERS, follow_redirects=True) as client:
             resp = await client.get(homepage_url)
             html = resp.text
 
-            found = _extract_from_text(html)
-            if found:
-                return found
+            found_url = found_url or _find_url(html)
+            found_key = found_key or _find_key(html)
+            if found_url and found_key:
+                return {"project_url": found_url, "anon_key": found_key}
 
-            script_srcs = SCRIPT_SRC_RE.findall(html)[:MAX_SCRIPTS_TO_CHECK]
-            for src in script_srcs:
+            candidate_srcs = SCRIPT_SRC_RE.findall(html) + PRELOAD_LINK_RE.findall(html)
+            # sin duplicados, conservando el orden
+            seen = set()
+            ordered_srcs = []
+            for src in candidate_srcs:
+                if src not in seen:
+                    seen.add(src)
+                    ordered_srcs.append(src)
+
+            for src in ordered_srcs[:MAX_SCRIPTS_TO_CHECK]:
                 script_url = urljoin(str(resp.url), src)
                 try:
                     script_resp = await client.get(script_url)
                     if len(script_resp.content) > MAX_FILE_SIZE:
                         continue
-                    found = _extract_from_text(script_resp.text)
-                    if found:
-                        return found
+                    text = script_resp.text
+                    found_url = found_url or _find_url(text)
+                    found_key = found_key or _find_key(text)
+                    if found_url and found_key:
+                        return {"project_url": found_url, "anon_key": found_key}
                 except Exception:
                     continue
 
