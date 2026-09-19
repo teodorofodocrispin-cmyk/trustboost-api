@@ -3143,7 +3143,7 @@ class UsdcReportRequest(BaseModel):
     project_url: str
     anon_key: str
 
-REPORT_PRICE_USDC = "0.10"
+REPORT_PRICE_USDC = "49"
 
 async def is_hash_used(tx_hash: str) -> bool:
     async with httpx.AsyncClient() as client:
