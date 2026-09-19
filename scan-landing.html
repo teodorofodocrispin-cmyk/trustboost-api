@@ -377,19 +377,18 @@
     <div class="findings" id="findings"></div>
 
     <div class="cta-row" id="cta-row" style="display:none;">
-      <div class="cta-card">
+      <div class="cta-card" style="grid-column: 1 / -1;">
         <h3>Detailed report</h3>
         <p>Every finding explained in plain language, with severity and exact fix.</p>
         <div class="cta-price mono">$49</div>
-        <a class="btn btn-ghost" href="https://buy.polar.sh/polar_cl_OTntcCWeVUMxe0jiLlgkwdJNvxDBUMD7X9nbh1srAXb" target="_blank" rel="noopener" style="text-decoration:none;">Get the report</a>
-      </div>
-      <div class="cta-card">
-        <h3>Fix + verification</h3>
-        <p>We apply the policy fixes and prove the leak is closed with a re-scan.</p>
-        <div class="cta-price mono">$299</div>
-        <a class="btn" href="#" style="text-decoration:none;">Request the fix</a>
+        <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:10px;">
+          <a class="btn btn-ghost" href="https://buy.polar.sh/polar_cl_OTntcCWeVUMxe0jiLlgkwdJNvxDBUMD7X9nbh1srAXb" target="_blank" rel="noopener" style="text-decoration:none; flex:1; min-width:160px;">Pay with card</a>
+          <button class="btn" id="usdc-btn" onclick="payWithUSDC()" style="flex:1; min-width:160px;">Pay with USDC</button>
+        </div>
+        <div class="error-msg" id="usdc-msg"></div>
       </div>
     </div>
+
   </div>
 </div>
 
@@ -624,6 +623,142 @@ function renderResults(data){
 
   results.classList.add("active");
   results.scrollIntoView({behavior:"smooth", block:"start"});
+}
+
+const REPORT_USDC_URL = "https://api.trustboost.dev/report-usdc";
+const USDC_BASE_CONTRACT = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+const WALLET_BASE = "0xCf1d31020A7915421f6d66B9835Dcb6f422337E7";
+const REPORT_PRICE_USDC = 49;
+
+async function payWithUSDC(){
+  const usdcBtn = document.getElementById("usdc-btn");
+  const usdcMsg = document.getElementById("usdc-msg");
+  const projectUrl = document.getElementById("project_url").value.trim();
+  const anonKey = document.getElementById("anon_key").value.trim();
+
+  usdcMsg.style.display = "none";
+
+  if(!window.ethereum){
+    usdcMsg.textContent = "No wallet found. Install MetaMask or Coinbase Wallet in your browser to pay with USDC.";
+    usdcMsg.style.display = "block";
+    return;
+  }
+
+  usdcBtn.disabled = true;
+  usdcBtn.textContent = "Connecting wallet...";
+
+  try{
+    const accounts = await window.ethereum.request({method: "eth_requestAccounts"});
+    const from = accounts[0];
+
+    try{
+      await window.ethereum.request({method: "wallet_switchEthereumChain", params: [{chainId: "0x2105"}]});
+    }catch(switchErr){
+      await window.ethereum.request({
+        method: "wallet_addEthereumChain",
+        params: [{
+          chainId: "0x2105",
+          chainName: "Base",
+          nativeCurrency: {name: "ETH", symbol: "ETH", decimals: 18},
+          rpcUrls: ["https://mainnet.base.org"],
+          blockExplorerUrls: ["https://basescan.org"]
+        }]
+      });
+    }
+
+    const amountUnits = REPORT_PRICE_USDC * 1e6;
+    const amountHex = amountUnits.toString(16).padStart(64, "0");
+    const recipientHex = WALLET_BASE.replace("0x", "").toLowerCase().padStart(64, "0");
+    const data = "0xa9059cbb" + recipientHex + amountHex;
+
+    usdcBtn.textContent = "Confirm in your wallet...";
+    const txHash = await window.ethereum.request({
+      method: "eth_sendTransaction",
+      params: [{from, to: USDC_BASE_CONTRACT, data}]
+    });
+
+    usdcBtn.textContent = "Confirming on Base...";
+    await unlockReportWithUsdc(txHash, projectUrl, anonKey);
+
+  }catch(err){
+    usdcMsg.textContent = err && err.message ? err.message : "Payment was cancelled or failed.";
+    usdcMsg.style.display = "block";
+    usdcBtn.disabled = false;
+    usdcBtn.textContent = "Pay with USDC";
+  }
+}
+
+async function unlockReportWithUsdc(txHash, projectUrl, anonKey){
+  const usdcBtn = document.getElementById("usdc-btn");
+  const usdcMsg = document.getElementById("usdc-msg");
+  const maxAttempts = 10;
+
+  for(let attempt = 1; attempt <= maxAttempts; attempt++){
+    try{
+      const resp = await fetch(REPORT_USDC_URL, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({tx_hash: txHash, project_url: projectUrl, anon_key: anonKey})
+      });
+      const data = await resp.json();
+
+      if(resp.ok){
+        renderPaidReport(data);
+        usdcBtn.disabled = false;
+        usdcBtn.textContent = "Pay with USDC";
+        return;
+      }
+
+      if(resp.status === 422 && attempt < maxAttempts){
+        await new Promise(r => setTimeout(r, 4000));
+        continue;
+      }
+
+      usdcMsg.textContent = data.message || "Could not verify the payment.";
+      usdcMsg.style.display = "block";
+      usdcBtn.disabled = false;
+      usdcBtn.textContent = "Pay with USDC";
+      return;
+
+    }catch(e){
+      if(attempt === maxAttempts){
+        usdcMsg.textContent = "Payment sent, but we couldn't confirm it yet. Transaction: " + txHash + " — contact support@trustboost.dev with this hash.";
+        usdcMsg.style.display = "block";
+        usdcBtn.disabled = false;
+        usdcBtn.textContent = "Pay with USDC";
+      }
+    }
+  }
+}
+
+function renderPaidReport(data){
+  const findingsEl = document.getElementById("findings");
+  const ctaRow = document.getElementById("cta-row");
+  ctaRow.style.display = "none";
+
+  const box = document.createElement("div");
+  box.className = "verdict ok";
+  box.style.marginTop = "16px";
+  box.innerHTML = `
+    <div>
+      <div class="verdict-label mono">PAID REPORT</div>
+      <div class="verdict-title" style="font-size:1.1rem;">${data.overall_summary || ""}</div>
+    </div>
+  `;
+  findingsEl.parentNode.insertBefore(box, findingsEl.nextSibling);
+
+  (data.findings || []).forEach(f=>{
+    const row = document.createElement("div");
+    row.style.padding = "16px";
+    row.style.borderTop = "1px solid var(--line)";
+    row.innerHTML = `
+      <div class="mono" style="margin-bottom:6px;">${f.table}</div>
+      <div style="font-size:0.88rem; color:var(--text-dim); margin-bottom:6px;">${f.plain_explanation || ""}</div>
+      <div style="font-size:0.85rem; margin-bottom:8px;"><strong>Impact:</strong> ${f.business_impact || ""}</div>
+      <pre class="mono" style="background:rgba(6,9,18,0.6); padding:10px; border-radius:6px; overflow-x:auto; font-size:0.78rem;">${(f.sql_fix || "").replace(/</g,"&lt;")}</pre>
+    `;
+    findingsEl.appendChild(row);
+  });
 }
 </script>
 
