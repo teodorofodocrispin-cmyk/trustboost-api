@@ -3057,6 +3057,36 @@ from fastapi.responses import HTMLResponse
 async def free_scan_page():
     with open("scan-landing.html", "r", encoding="utf-8") as f:
         return HTMLResponse(content=f.read())
+@app.get("/free-scan", include_in_schema=False)
+async def free_scan_page():
+    with open("scan-landing.html", "r", encoding="utf-8") as f:
+        return HTMLResponse(content=f.read())
+
+# ── SEO pages (búsqueda de miedo) — una sola ruta para todas ──
+# Agregar una plataforma nueva = agregar una entrada en seo_pages_data.py.
+# Nunca hay que tocar esta ruta ni crear un archivo nuevo por plataforma.
+from seo_pages_data import SEO_PAGES
+
+@app.get("/check/{slug}", include_in_schema=False)
+async def seo_check_page(slug: str):
+    data = SEO_PAGES.get(slug)
+    if not data:
+        raise HTTPException(404, "page not found")
+    with open("seo-template.html", "r", encoding="utf-8") as f:
+        template = f.read()
+    html = (
+        template
+        .replace("__PAGE_TITLE__", data["title"])
+        .replace("__META_DESCRIPTION__", data["meta_description"])
+        .replace("__HERO_H1__", data["hero_h1"])
+        .replace("__HERO_LEDE__", data["hero_lede"])
+        .replace("__FAQ_HEADING__", data["faq_heading"])
+        .replace("__FAQ_ITEMS__", data["faq_items"])
+    )
+    return HTMLResponse(content=html)
+
+@app.post("/scan")
+async def scan_endpoint(req: ScanRequest, request: Request):        
 @app.post("/scan")
 async def scan_endpoint(req: ScanRequest, request: Request):
     import hashlib
