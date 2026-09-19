@@ -214,6 +214,31 @@
   .verdict-stats .l{ font-size:0.72rem; color:var(--text-dim); }
 
   .findings{ border:1px solid var(--line); border-radius:var(--radius); overflow:hidden; margin-bottom:24px; background:var(--panel); backdrop-filter:blur(6px); }
+
+  /* ── Paid report document ─────────────────────── */
+  .report-doc{ margin-top:36px; border:1px solid var(--line-strong); border-radius:var(--radius); overflow:hidden; background:var(--panel); backdrop-filter:blur(6px); }
+  .report-header{ padding:28px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:16px; }
+  .report-header h2{ font-size:1.3rem; margin:0 0 6px; }
+  .report-meta{ font-size:0.78rem; color:var(--text-dim); font-family:'IBM Plex Mono', monospace; line-height:1.6; }
+  .report-badge{ font-family:'IBM Plex Mono', monospace; font-size:0.72rem; padding:5px 12px; border-radius:20px; white-space:nowrap; height:fit-content; }
+  .report-badge.critical{ background:var(--coral-bg); color:var(--coral); }
+  .report-badge.private{ background:rgba(245,166,35,0.16); color:var(--amber); }
+  .report-summary{ padding:22px 28px; border-bottom:1px solid var(--line); font-size:0.94rem; color:var(--text-dim); line-height:1.65; }
+  .finding-card{ padding:28px; border-bottom:1px solid var(--line); }
+  .finding-card:last-child{ border-bottom:none; }
+  .finding-head{ display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; gap:12px; flex-wrap:wrap; }
+  .finding-head .fname{ font-family:'IBM Plex Mono', monospace; font-size:1.02rem; font-weight:600; }
+  .finding-explain{ font-size:0.92rem; color:var(--text-dim); margin-bottom:14px; line-height:1.65; }
+  .impact-box{ background:rgba(255,107,74,0.08); border-left:3px solid var(--coral); padding:12px 16px; border-radius:0 6px 6px 0; font-size:0.88rem; margin-bottom:18px; line-height:1.5; }
+  .impact-box .label{ font-family:'IBM Plex Mono', monospace; font-size:0.72rem; color:var(--coral); display:block; margin-bottom:4px; }
+  .code-wrap{ position:relative; }
+  .code-label{ font-family:'IBM Plex Mono', monospace; font-size:0.72rem; color:var(--text-dim); margin-bottom:8px; }
+  .code-block{ background:#060912; border:1px solid var(--line); border-radius:8px; padding:16px; padding-right:76px; font-family:'IBM Plex Mono', monospace; font-size:0.82rem; overflow-x:auto; white-space:pre; color:#bfe8d4; line-height:1.6; margin:0; }
+  .copy-btn{ position:absolute; top:34px; right:10px; background:var(--panel-raised); border:1px solid var(--line-strong); color:var(--text); font-size:0.72rem; padding:5px 10px; border-radius:6px; cursor:pointer; font-family:'IBM Plex Mono', monospace; }
+  .copy-btn:hover{ border-color:var(--amber); }
+  .report-footer{ padding:16px 28px; font-size:0.76rem; color:var(--text-dim); display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px; }
+  .report-footer a{ color:var(--amber); }
+
   .finding-row{
     display:grid; grid-template-columns:1fr auto auto;
     gap:16px; align-items:center;
@@ -385,9 +410,12 @@
           <a class="btn btn-ghost" href="https://buy.polar.sh/polar_cl_OTntcCWeVUMxe0jiLlgkwdJNvxDBUMD7X9nbh1srAXb" target="_blank" rel="noopener" style="text-decoration:none; flex:1; min-width:160px;">Pay with card</a>
           <button class="btn" id="usdc-btn" onclick="payWithUSDC()" style="flex:1; min-width:160px;">Pay with USDC</button>
         </div>
+        <p style="font-size:0.76rem; color:var(--text-dim); margin:0 0 10px;">USDC on Base network only. Sending on any other network will result in permanent loss of funds.</p>
         <div class="error-msg" id="usdc-msg"></div>
       </div>
     </div>
+
+    <div id="paid-report"></div>
 
   </div>
 </div>
@@ -703,7 +731,7 @@ async function unlockReportWithUsdc(txHash, projectUrl, anonKey){
       const data = await resp.json();
 
       if(resp.ok){
-        renderPaidReport(data);
+        renderPaidReport(data, txHash);
         usdcBtn.disabled = false;
         usdcBtn.textContent = "Pay with USDC";
         return;
@@ -731,33 +759,71 @@ async function unlockReportWithUsdc(txHash, projectUrl, anonKey){
   }
 }
 
-function renderPaidReport(data){
-  const findingsEl = document.getElementById("findings");
+function escapeHtml(s){
+  return (s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+
+function renderPaidReport(data, txHash){
   const ctaRow = document.getElementById("cta-row");
+  const container = document.getElementById("paid-report");
   ctaRow.style.display = "none";
 
-  const box = document.createElement("div");
-  box.className = "verdict ok";
-  box.style.marginTop = "16px";
-  box.innerHTML = `
-    <div>
-      <div class="verdict-label mono">PAID REPORT</div>
-      <div class="verdict-title" style="font-size:1.1rem;">${data.overall_summary || ""}</div>
+  const badgeClass = data.overall_severity === "CRITICAL" ? "critical" : "private";
+  const generatedAt = new Date().toLocaleString("en-US", {dateStyle:"medium", timeStyle:"short"});
+
+  let findingsHtml = "";
+  (data.findings || []).forEach((f, i)=>{
+    const blockId = "sql-block-" + i;
+    findingsHtml += `
+      <div class="finding-card">
+        <div class="finding-head">
+          <span class="fname">${escapeHtml(f.table)}</span>
+          <span class="report-badge ${badgeClass}">${escapeHtml(f.severity || data.overall_severity || "")}</span>
+        </div>
+        <div class="finding-explain">${escapeHtml(f.plain_explanation)}</div>
+        <div class="impact-box">
+          <span class="label">BUSINESS IMPACT</span>
+          ${escapeHtml(f.business_impact)}
+        </div>
+        <div class="code-wrap">
+          <div class="code-label">Fix — run this in your Supabase SQL editor</div>
+          <pre class="code-block" id="${blockId}">${escapeHtml(f.sql_fix)}</pre>
+          <button class="copy-btn" onclick="copySql('${blockId}', this)">Copy</button>
+        </div>
+      </div>
+    `;
+  });
+
+  const txLine = txHash
+    ? `Paid via USDC on Base — <a href="https://basescan.org/tx/${txHash}" target="_blank" rel="noopener">view transaction</a>`
+    : "Paid via card, processed by Polar";
+
+  container.innerHTML = `
+    <div class="report-doc">
+      <div class="report-header">
+        <div>
+          <h2>Detailed Security Report</h2>
+          <div class="report-meta">${escapeHtml(data.project_url)}<br>Generated ${generatedAt}</div>
+        </div>
+        <span class="report-badge ${badgeClass}">SEVERITY: ${escapeHtml(data.overall_severity || "")}</span>
+      </div>
+      <div class="report-summary">${escapeHtml(data.overall_summary)}</div>
+      ${findingsHtml}
+      <div class="report-footer">
+        <span>TrustBoost — generated automatically, no data values were read by the AI model</span>
+        <span>${txLine}</span>
+      </div>
     </div>
   `;
-  findingsEl.parentNode.insertBefore(box, findingsEl.nextSibling);
+  container.scrollIntoView({behavior:"smooth", block:"start"});
+}
 
-  (data.findings || []).forEach(f=>{
-    const row = document.createElement("div");
-    row.style.padding = "16px";
-    row.style.borderTop = "1px solid var(--line)";
-    row.innerHTML = `
-      <div class="mono" style="margin-bottom:6px;">${f.table}</div>
-      <div style="font-size:0.88rem; color:var(--text-dim); margin-bottom:6px;">${f.plain_explanation || ""}</div>
-      <div style="font-size:0.85rem; margin-bottom:8px;"><strong>Impact:</strong> ${f.business_impact || ""}</div>
-      <pre class="mono" style="background:rgba(6,9,18,0.6); padding:10px; border-radius:6px; overflow-x:auto; font-size:0.78rem;">${(f.sql_fix || "").replace(/</g,"&lt;")}</pre>
-    `;
-    findingsEl.appendChild(row);
+function copySql(blockId, btn){
+  const text = document.getElementById(blockId).textContent;
+  navigator.clipboard.writeText(text).then(()=>{
+    const original = btn.textContent;
+    btn.textContent = "Copied";
+    setTimeout(()=>{ btn.textContent = original; }, 1500);
   });
 }
 </script>
