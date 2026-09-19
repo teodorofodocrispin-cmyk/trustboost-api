@@ -107,9 +107,11 @@ async def discover_tables(project_url: str, anon_key: str) -> list[str]:
             except Exception:
                 pass
 
-    # Fallback: el mapa general está bloqueado (caso común en 2026) —
-    # probamos nombres comunes uno por uno.
-    return COMMON_TABLE_NAMES[:MAX_TABLES]
+        # Fallback: el mapa general está bloqueado (caso común en 2026) —
+    # probamos TODOS los nombres comunes, no solo los primeros MAX_TABLES.
+    # (MAX_TABLES solo debe limitar el caso de arriba, cuando Supabase
+    # devuelve cientos de tablas reales; aquí la lista ya es corta y fija.)
+    return COMMON_TABLE_NAMES
 
 
 async def probe_table(project_url: str, anon_key: str, table: str) -> TableFinding:
