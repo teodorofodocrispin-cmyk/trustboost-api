@@ -70,24 +70,46 @@ class ScanReport:
         return worst
 
 
+# Nombres de tabla más comunes en apps vibe-coded (SaaS, e-commerce,
+# apps sociales/comunitarias). Actualiza esta lista con el tiempo según
+# lo que veas en tus escaneos reales.
+COMMON_TABLE_NAMES = [
+    "users", "profiles", "accounts", "customers", "clients", "leads",
+    "contacts", "subscribers", "waitlist", "orders", "products",
+    "carts", "payments", "invoices", "transactions", "messages",
+    "conversations", "chats", "comments", "reviews", "feedback",
+    "posts", "articles", "notes", "files", "uploads", "documents",
+    "todos", "tasks", "projects", "teams", "organizations",
+    "bookings", "appointments", "reservations", "events",
+    "notifications", "settings", "sessions", "logs",
+]
+
+
 async def discover_tables(project_url: str, anon_key: str) -> list[str]:
-    """Supabase expone por defecto un documento OpenAPI en /rest/v1/ con la
-    lista de tablas disponibles vía la API automática (PostgREST). Es
-    información pública, visible para cualquier visitante del sitio."""
+    """Intenta primero el mapa completo vía OpenAPI (funciona en proyectos
+    Supabase más antiguos que aún no aplican el bloqueo por defecto de
+    2026). Si Supabase lo rechaza (401/403 — solo permite service_role),
+    caemos a probar una lista de nombres de tabla comunes: cada uno se
+    prueba individualmente en probe_table(), que sí sigue funcionando con
+    la anon key sin importar este cambio."""
     url = f"{project_url.rstrip('/')}/rest/v1/"
     headers = {"apikey": anon_key, "Authorization": f"Bearer {anon_key}"}
 
     async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
         resp = await client.get(url, headers=headers)
-        if resp.status_code != 200:
-            return []
-        try:
-            spec = resp.json()
-            paths = spec.get("paths", {})
-            tables = [p.lstrip("/") for p in paths.keys() if p not in ("/", "")]
-            return tables[:MAX_TABLES]
-        except Exception:
-            return []
+        if resp.status_code == 200:
+            try:
+                spec = resp.json()
+                paths = spec.get("paths", {})
+                tables = [p.lstrip("/") for p in paths.keys() if p not in ("/", "")]
+                if tables:
+                    return tables[:MAX_TABLES]
+            except Exception:
+                pass
+
+    # Fallback: el mapa general está bloqueado (caso común en 2026) —
+    # probamos nombres comunes uno por uno.
+    return COMMON_TABLE_NAMES[:MAX_TABLES]
 
 
 async def probe_table(project_url: str, anon_key: str, table: str) -> TableFinding:
