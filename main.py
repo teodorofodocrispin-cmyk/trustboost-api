@@ -3057,11 +3057,7 @@ from fastapi.responses import HTMLResponse
 async def free_scan_page():
     with open("scan-landing.html", "r", encoding="utf-8") as f:
         return HTMLResponse(content=f.read())
-@app.get("/free-scan", include_in_schema=False)
-async def free_scan_page():
-    with open("scan-landing.html", "r", encoding="utf-8") as f:
-        return HTMLResponse(content=f.read())
-
+        
 # ── SEO pages (búsqueda de miedo) — una sola ruta para todas ──
 # Agregar una plataforma nueva = agregar una entrada en seo_pages_data.py.
 # Nunca hay que tocar esta ruta ni crear un archivo nuevo por plataforma.
@@ -3085,8 +3081,7 @@ async def seo_check_page(slug: str):
     )
     return HTMLResponse(content=html)
 
-@app.post("/scan")
-async def scan_endpoint(req: ScanRequest, request: Request):        
+     
 @app.post("/scan")
 async def scan_endpoint(req: ScanRequest, request: Request):
     import hashlib
