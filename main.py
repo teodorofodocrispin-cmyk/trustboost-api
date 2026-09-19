@@ -3133,6 +3133,64 @@ async def report_endpoint(req: ScanRequest, request: Request):
         "overall_summary": ai_report.get("overall_summary", ""),
         "findings": ai_report.get("findings", []),
     }
+    # ── Detailed Report paid via USDC on Base ─────────────────
+# Verificación leyendo la blockchain directamente (usdc_verify.py),
+# adaptado de la lógica ya probada en Inscrbd. No depende de Coinbase
+# Commerce, Alchemy, ni ningún servicio de terceros.
+
+class UsdcReportRequest(BaseModel):
+    tx_hash: str
+    project_url: str
+    anon_key: str
+
+REPORT_PRICE_USDC = "49"
+
+async def is_hash_used(tx_hash: str) -> bool:
+    async with httpx.AsyncClient() as client:
+        r = await client.get(
+            f"{SUPABASE_URL}/rest/v1/usdc_used_hashes",
+            headers=SUPABASE_HEADERS,
+            params={"tx_hash": f"eq.{tx_hash}", "select": "tx_hash"}
+        )
+        return len(r.json()) > 0 if r.status_code == 200 else False
+
+async def mark_hash_used(tx_hash: str):
+    async with httpx.AsyncClient() as client:
+        await client.post(
+            f"{SUPABASE_URL}/rest/v1/usdc_used_hashes",
+            headers=SUPABASE_HEADERS,
+            json={"tx_hash": tx_hash}
+        )
+
+@app.post("/report-usdc")
+async def report_usdc_endpoint(req: UsdcReportRequest):
+    from usdc_verify import verify_base_usdc_payment
+
+    if await is_hash_used(req.tx_hash):
+        return JSONResponse(status_code=409, content={"status": "error", "message": "Este pago ya fue usado para generar un reporte."})
+
+    payment = await verify_base_usdc_payment(req.tx_hash, expected_recipient=WALLET_BASE, expected_amount=REPORT_PRICE_USDC)
+    if not payment["ok"]:
+        return JSONResponse(status_code=422, content={"status": "error", "message": payment["reason"]})
+
+    await mark_hash_used(req.tx_hash)
+
+    if not req.project_url.startswith("https://") or ".supabase.co" not in req.project_url:
+        return JSONResponse(status_code=400, content={"status": "error", "message": "URL de proyecto Supabase inválida"})
+
+    from supabase_scanner import scan_project
+    from report_generator import generate_report
+
+    report = await scan_project(req.project_url, req.anon_key)
+    ai_report = await generate_report(report, openai_client)
+
+    return {
+        "status": "success",
+        "project_url": report.project_url,
+        "overall_severity": report.overall_severity,
+        "overall_summary": ai_report.get("overall_summary", ""),
+        "findings": ai_report.get("findings", []),
+    }
 # ── Alias endpoints — agent-friendly naming ───────────────
 # Agents infer endpoint names from capability descriptions.
 # These aliases capture that traffic and redirect to core endpoints.
