@@ -3051,7 +3051,7 @@ async def increment_scan(ip_hash: str):
 class ScanRequest(BaseModel):
     project_url: str
     anon_key: str
- from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse
 
 @app.get("/free-scan", include_in_schema=False)
 async def free_scan_page():
