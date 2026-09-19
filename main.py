@@ -3025,7 +3025,71 @@ async def demo_sanitize(req: DemoRequest, request: Request):
             status_code=500,
             content={"status": "error", "message": "Sanitization failed — please try again"}
         )
-
+SCAN_LIMIT_PER_HOUR = 5   # un poco más generoso que /demo porque no gasta OpenAI en cada tabla vacía
+ 
+async def get_scan_count(ip_hash: str) -> int:
+    async with httpx.AsyncClient() as client:
+        r = await client.get(
+            f"{SUPABASE_URL}/rest/v1/scan_requests",
+            headers=SUPABASE_HEADERS,
+            params={
+                "ip_hash": f"eq.{ip_hash}",
+                "created_at": f"gte.{(datetime.utcnow() - timedelta(hours=1)).isoformat()}",
+                "select": "id"
+            }
+        )
+        return len(r.json()) if r.status_code == 200 else 0
+ 
+async def increment_scan(ip_hash: str):
+    async with httpx.AsyncClient() as client:
+        await client.post(
+            f"{SUPABASE_URL}/rest/v1/scan_requests",
+            headers=SUPABASE_HEADERS,
+            json={"ip_hash": ip_hash}
+        )
+ 
+class ScanRequest(BaseModel):
+    project_url: str
+    anon_key: str
+ 
+@app.post("/scan")
+async def scan_endpoint(req: ScanRequest, request: Request):
+    import hashlib
+    raw_ip = request.client.host if request.client else "unknown"
+    ip_hash = hashlib.sha256(raw_ip.encode()).hexdigest()[:16]
+ 
+    count = await get_scan_count(ip_hash)
+    if count >= SCAN_LIMIT_PER_HOUR:
+        return JSONResponse(
+            status_code=429,
+            content={"status": "scan_limit_reached",
+                      "message": f"Límite de {SCAN_LIMIT_PER_HOUR} escaneos/hora alcanzado. Vuelve en un rato."}
+        )
+ 
+    if not req.project_url.startswith("https://") or ".supabase.co" not in req.project_url:
+        return JSONResponse(status_code=400, content={"status": "error", "message": "URL de proyecto Supabase inválida"})
+ 
+    from supabase_scanner import scan_project   # el módulo de este archivo
+    report = await scan_project(req.project_url, req.anon_key)
+    await increment_scan(ip_hash)
+ 
+    return {
+        "status": "success",
+        "project_url": report.project_url,
+        "overall_severity": report.overall_severity,
+        "tables_discovered": report.tables_discovered,
+        "tables_with_leak": len(report.findings),
+        "public_storage_buckets": report.public_storage_buckets,
+        "details": [
+            {
+                "table": f.table_name,
+                "severity": f.severity,
+                "pii_category": f.pii_category,
+                "rows_exposed_sample": f.sample_rows_returned,
+            }
+            for f in report.findings
+        ],
+    }
 
 # ── Alias endpoints — agent-friendly naming ───────────────
 # Agents infer endpoint names from capability descriptions.
