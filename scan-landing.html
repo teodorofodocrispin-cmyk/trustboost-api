@@ -406,14 +406,19 @@
         <h3>Detailed report</h3>
         <p>Every finding explained in plain language, with severity and exact fix.</p>
         <div class="cta-price mono">$49</div>
-        <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:10px;">
-          <a class="btn btn-ghost" href="https://buy.polar.sh/polar_cl_OTntcCWeVUMxe0jiLlgkwdJNvxDBUMD7X9nbh1srAXb" target="_blank" rel="noopener" style="text-decoration:none; flex:1; min-width:160px;">Pay with card</a>
-          <button class="btn" id="usdc-btn" onclick="payWithUSDC()" style="flex:1; min-width:160px;">Pay with USDC</button>
+        <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-start;">
+          <div style="flex:1; min-width:160px;">
+            <a class="btn btn-ghost" href="https://buy.polar.sh/polar_cl_OTntcCWeVUMxe0jiLlgkwdJNvxDBUMD7X9nbh1srAXb" target="_blank" rel="noopener" style="text-decoration:none; display:block; width:100%;">Pay with card</a>
+          </div>
+          <div style="flex:1; min-width:160px;">
+            <button class="btn" id="usdc-btn" onclick="payWithUSDC()" style="width:100%;">Pay with USDC</button>
+            <p style="font-size:0.72rem; color:var(--text-dim); margin:8px 0 0; line-height:1.4;">Automatically connects to your wallet extension. USDC on Base network only — sending on any other network results in permanent loss of funds.</p>
+          </div>
         </div>
-        <p style="font-size:0.76rem; color:var(--text-dim); margin:0 0 10px;">USDC on Base network only. Sending on any other network will result in permanent loss of funds.</p>
-        <div class="error-msg" id="usdc-msg"></div>
+        <div class="error-msg" id="usdc-msg" style="margin-top:12px;"></div>
       </div>
     </div>
+
 
     <div id="paid-report"></div>
 
