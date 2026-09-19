@@ -48,7 +48,7 @@ class TableFinding:
     pii_score: float = 0.0
     pii_category: str = "CLEAN"     # CLEAN | SENSITIVE | PRIVATE | CRITICAL
     severity: str = "OK"            # OK | PRIVATE | CRITICAL (ver nota abajo)
-
+    column_names: list = field(default_factory=list)   # solo nombres, nunca valores
 
 @dataclass
 class ScanReport:
@@ -151,6 +151,9 @@ async def probe_table(project_url: str, anon_key: str, table: str) -> TableFindi
     # contiene PII real, sube a "CRITICAL".
     severity = "CRITICAL" if pii_category == "CRITICAL" else "PRIVATE"
 
+    # Nombres de columnas únicamente — nunca los valores reales.
+    column_names = list(rows[0].keys()) if rows else []
+
     return TableFinding(
         table_name=table,
         is_readable=True,
@@ -159,8 +162,8 @@ async def probe_table(project_url: str, anon_key: str, table: str) -> TableFindi
         pii_score=pii_score,
         pii_category=pii_category,
         severity=severity,
+        column_names=column_names,
     )
-
 
 async def check_public_storage(project_url: str, anon_key: str) -> list[str]:
     """Revisa si hay buckets de storage marcados como públicos."""
