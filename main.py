@@ -3090,7 +3090,44 @@ async def scan_endpoint(req: ScanRequest, request: Request):
             for f in report.findings
         ],
     }
+# ── Paid detailed report (AI-generated) ───────────────────
+# TEMPORARY: sin control de pago todavía. Antes de recibir tráfico real,
+# esto debe quedar detrás de una verificación de que el pago en Polar.sh
+# se completó (ver checklist). Por ahora sirve para probar que el
+# generador de reportes funciona de punta a punta.
 
+@app.post("/report")
+async def report_endpoint(req: ScanRequest, request: Request):
+    import hashlib
+    raw_ip = request.client.host if request.client else "unknown"
+    ip_hash = hashlib.sha256(raw_ip.encode()).hexdigest()[:16]
+
+    count = await get_scan_count(ip_hash)
+    if count >= SCAN_LIMIT_PER_HOUR:
+        return JSONResponse(
+            status_code=429,
+            content={"status": "scan_limit_reached",
+                      "message": f"Límite de {SCAN_LIMIT_PER_HOUR} escaneos/hora alcanzado. Vuelve en un rato."}
+        )
+
+    if not req.project_url.startswith("https://") or ".supabase.co" not in req.project_url:
+        return JSONResponse(status_code=400, content={"status": "error", "message": "URL de proyecto Supabase inválida"})
+
+    from supabase_scanner import scan_project
+    from report_generator import generate_report
+
+    report = await scan_project(req.project_url, req.anon_key)
+    await increment_scan(ip_hash)
+
+    ai_report = await generate_report(report, openai_client)
+
+    return {
+        "status": "success",
+        "project_url": report.project_url,
+        "overall_severity": report.overall_severity,
+        "overall_summary": ai_report.get("overall_summary", ""),
+        "findings": ai_report.get("findings", []),
+    }
 # ── Alias endpoints — agent-friendly naming ───────────────
 # Agents infer endpoint names from capability descriptions.
 # These aliases capture that traffic and redirect to core endpoints.
