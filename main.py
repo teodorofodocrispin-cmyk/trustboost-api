@@ -3191,6 +3191,89 @@ async def report_usdc_endpoint(req: UsdcReportRequest):
         "overall_summary": ai_report.get("overall_summary", ""),
         "findings": ai_report.get("findings", []),
     }
+# ── Research batch mode — free, admin-only, for your own market research ──
+# Nunca expuesto públicamente: solo responde si el header X-Admin-Secret
+# coincide con tu ADMIN_SECRET. No cobra nada, no usa /report ni Polar ni
+# USDC — corre el mismo escaneo gratuito de siempre, pero automatiza la
+# parte de buscar la URL y anon key en el código público de cada app.
+
+ADMIN_SECRET = os.getenv("ADMIN_SECRET", "")
+
+class ResearchBatchRequest(BaseModel):
+    urls: List[str]
+
+def _check_admin(request: Request):
+    if not ADMIN_SECRET or request.headers.get("X-Admin-Secret") != ADMIN_SECRET:
+        raise HTTPException(403, "forbidden")
+
+async def store_research_scan(row: dict):
+    async with httpx.AsyncClient() as client:
+        await client.post(
+            f"{SUPABASE_URL}/rest/v1/research_scans",
+            headers=SUPABASE_HEADERS,
+            json=row
+        )
+
+@app.post("/admin/scan-batch")
+async def admin_scan_batch(req: ResearchBatchRequest, request: Request):
+    _check_admin(request)
+
+    from discover_credentials import discover_supabase_credentials
+    from supabase_scanner import scan_project
+
+    results = []
+    for homepage in req.urls:
+        creds = await discover_supabase_credentials(homepage)
+        if not creds:
+            results.append({"homepage": homepage, "status": "not_found"})
+            continue
+
+        report = await scan_project(creds["project_url"], creds["anon_key"])
+        row = {
+            "homepage": homepage,
+            "project_url": report.project_url,
+            "tables_discovered": report.tables_discovered,
+            "tables_with_leak": len(report.findings),
+            "overall_severity": report.overall_severity,
+            "public_storage_buckets": report.public_storage_buckets,
+            "findings": [
+                {"table": f.table_name, "severity": f.severity, "pii_category": f.pii_category, "rows": f.sample_rows_returned}
+                for f in report.findings
+            ],
+        }
+        await store_research_scan(row)
+        results.append({"homepage": homepage, "status": "scanned", **row})
+
+    return {"status": "success", "count": len(results), "results": results}
+
+
+@app.get("/admin/research-stats")
+async def admin_research_stats(request: Request):
+    _check_admin(request)
+
+    async with httpx.AsyncClient() as client:
+        r = await client.get(
+            f"{SUPABASE_URL}/rest/v1/research_scans",
+            headers=SUPABASE_HEADERS,
+            params={"select": "*"}
+        )
+        rows = r.json() if r.status_code == 200 else []
+
+    total = len(rows)
+    with_leak = sum(1 for row in rows if (row.get("tables_with_leak") or 0) > 0)
+    critical = sum(1 for row in rows if row.get("overall_severity") == "CRITICAL")
+    private = sum(1 for row in rows if row.get("overall_severity") == "PRIVATE")
+    total_tables_exposed = sum(row.get("tables_with_leak") or 0 for row in rows)
+
+    return {
+        "total_scanned": total,
+        "with_at_least_one_leak": with_leak,
+        "pct_with_leak": round(with_leak / total * 100, 1) if total else 0,
+        "critical_count": critical,
+        "private_count": private,
+        "avg_tables_exposed_per_app": round(total_tables_exposed / total, 2) if total else 0,
+        "raw": rows,
+    }    
 # ── Alias endpoints — agent-friendly naming ───────────────
 # Agents infer endpoint names from capability descriptions.
 # These aliases capture that traffic and redirect to core endpoints.
