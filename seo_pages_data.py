@@ -45,6 +45,8 @@ SEO_PAGES = {
              "Use the free scanner above. Paste your Supabase project URL and its public anon key (both are already visible in your app's own browser code, in Project Settings → API on Supabase). The scan checks, read-only, whether common tables and storage buckets are readable without logging in."),
             ("Does this touch my code or my users' data?",
              "No. The scan only reads what's already publicly reachable from any visitor's browser, never writes or modifies anything, and doesn't store the data values it finds — only whether a table responded and how sensitive the response looked."),
+            ("Doesn't Supabase already have a free tool for this?",
+             "Yes — Supabase's own Security Advisor (Database → Security Advisor in your project dashboard) checks for similar things, for free. The difference: it lives inside a technical dashboard and assumes you can read SQL and policy rules. This scan is built for everyone else — you paste two values you already have, get a plain-language answer, and if something's wrong, a ready-to-paste SQL fix. No dashboard, no SQL knowledge required."),
         ]),
     },
 
@@ -63,6 +65,8 @@ SEO_PAGES = {
              "Use the free scanner above. Paste your Supabase project URL and its public anon key (both are already visible in your app's own browser code, in Project Settings → API on Supabase). The scan checks, read-only, whether common tables and storage buckets are readable without logging in."),
             ("Does this touch my code or my users' data?",
              "No. The scan only reads what's already publicly reachable from any visitor's browser, never writes or modifies anything, and doesn't store the data values it finds — only whether a table responded and how sensitive the response looked."),
+            ("Doesn't Supabase already have a free tool for this?",
+             "Yes — Supabase's own Security Advisor (Database → Security Advisor in your project dashboard) checks for similar things, for free. The difference: it lives inside a technical dashboard and assumes you can read SQL and policy rules. This scan is built for everyone else — you paste two values you already have, get a plain-language answer, and if something's wrong, a ready-to-paste SQL fix. No dashboard, no SQL knowledge required."),
         ]),
     },
 
@@ -81,6 +85,8 @@ SEO_PAGES = {
              "Use the free scanner above. Paste your Supabase project URL and its public anon key (both are already visible in your app's own browser code, in Project Settings → API on Supabase). The scan checks, read-only, whether common tables and storage buckets are readable without logging in."),
             ("Does this touch my code or my users' data?",
              "No. The scan only reads what's already publicly reachable from any visitor's browser, never writes or modifies anything, and doesn't store the data values it finds — only whether a table responded and how sensitive the response looked."),
+            ("Doesn't Supabase already have a free tool for this?",
+             "Yes — Supabase's own Security Advisor (Database → Security Advisor in your project dashboard) checks for similar things, for free. The difference: it lives inside a technical dashboard and assumes you can read SQL and policy rules. This scan is built for everyone else — you paste two values you already have, get a plain-language answer, and if something's wrong, a ready-to-paste SQL fix. No dashboard, no SQL knowledge required."),
         ]),
     },
 
@@ -99,6 +105,8 @@ SEO_PAGES = {
              "Use the free scanner above. Paste your Supabase project URL and its public anon key (both are already visible in your app's own browser code, in Project Settings → API on Supabase). The scan checks, read-only, whether common tables and storage buckets are readable without logging in."),
             ("Does this touch my code or my users' data?",
              "No. The scan only reads what's already publicly reachable from any visitor's browser, never writes or modifies anything, and doesn't store the data values it finds — only whether a table responded and how sensitive the response looked."),
+            ("Doesn't Supabase already have a free tool for this?",
+             "Yes — Supabase's own Security Advisor (Database → Security Advisor in your project dashboard) checks for similar things, for free. The difference: it lives inside a technical dashboard and assumes you can read SQL and policy rules. This scan is built for everyone else — you paste two values you already have, get a plain-language answer, and if something's wrong, a ready-to-paste SQL fix. No dashboard, no SQL knowledge required."),
         ]),
     },
 
@@ -117,6 +125,8 @@ SEO_PAGES = {
              "Use the free scanner above. Paste your Supabase project URL and its public anon key (both are already visible in your app's own browser code, in Project Settings → API on Supabase). The scan checks, read-only, whether common tables and storage buckets are readable without logging in."),
             ("Does this touch my code or my users' data?",
              "No. The scan only reads what's already publicly reachable from any visitor's browser, never writes or modifies anything, and doesn't store the data values it finds — only whether a table responded and how sensitive the response looked."),
+            ("Doesn't Supabase already have a free tool for this?",
+             "Yes — Supabase's own Security Advisor (Database → Security Advisor in your project dashboard) checks for similar things, for free. The difference: it lives inside a technical dashboard and assumes you can read SQL and policy rules. This scan is built for everyone else — you paste two values you already have, get a plain-language answer, and if something's wrong, a ready-to-paste SQL fix. No dashboard, no SQL knowledge required."),
         ]),
     },
 
@@ -135,6 +145,8 @@ SEO_PAGES = {
              "Use the free scanner above. Paste your Supabase project URL and its public anon key (both are already visible in your app's own browser code, in Project Settings → API on Supabase). The scan checks, read-only, whether common tables and storage buckets are readable without logging in."),
             ("Does this touch my code or my users' data?",
              "No. The scan only reads what's already publicly reachable from any visitor's browser, never writes or modifies anything, and doesn't store the data values it finds — only whether a table responded and how sensitive the response looked."),
+            ("Doesn't Supabase already have a free tool for this?",
+             "Yes — Supabase's own Security Advisor (Database → Security Advisor in your project dashboard) checks for similar things, for free. The difference: it lives inside a technical dashboard and assumes you can read SQL and policy rules. This scan is built for everyone else — you paste two values you already have, get a plain-language answer, and if something's wrong, a ready-to-paste SQL fix. No dashboard, no SQL knowledge required."),
         ]),
     },
 
@@ -153,6 +165,8 @@ SEO_PAGES = {
              "Use the free scanner above. Paste your Supabase project URL and its public anon key (both are already visible in your app's own browser code, in Project Settings → API on Supabase). The scan checks, read-only, whether common tables and storage buckets are readable without logging in."),
             ("Does this touch my code or my users' data?",
              "No. The scan only reads what's already publicly reachable from any visitor's browser, never writes or modifies anything, and doesn't store the data values it finds — only whether a table responded and how sensitive the response looked."),
+            ("Doesn't Supabase already have a free tool for this?",
+             "Yes — Supabase's own Security Advisor (Database → Security Advisor in your project dashboard) checks for similar things, for free. The difference: it lives inside a technical dashboard and assumes you can read SQL and policy rules. This scan is built for everyone else — you paste two values you already have, get a plain-language answer, and if something's wrong, a ready-to-paste SQL fix. No dashboard, no SQL knowledge required."),
         ]),
     },
 
@@ -171,6 +185,8 @@ SEO_PAGES = {
              "Use the free scanner above. Paste your Supabase project URL and its public anon key (both are already visible in your app's own browser code, in Project Settings → API on Supabase). The scan checks, read-only, whether common tables and storage buckets are readable without logging in."),
             ("Does this touch my code or my users' data?",
              "No. The scan only reads what's already publicly reachable from any visitor's browser, never writes or modifies anything, and doesn't store the data values it finds — only whether a table responded and how sensitive the response looked."),
+            ("Doesn't Supabase already have a free tool for this?",
+             "Yes — Supabase's own Security Advisor (Database → Security Advisor in your project dashboard) checks for similar things, for free. The difference: it lives inside a technical dashboard and assumes you can read SQL and policy rules. This scan is built for everyone else — you paste two values you already have, get a plain-language answer, and if something's wrong, a ready-to-paste SQL fix. No dashboard, no SQL knowledge required."),
         ]),
     },
 
@@ -189,6 +205,8 @@ SEO_PAGES = {
              "Use the free scanner above. Paste your Supabase project URL and its public anon key (both are already visible in your app's own browser code, in Project Settings → API on Supabase). The scan checks, read-only, whether common tables and storage buckets are readable without logging in."),
             ("Does this touch my code or my users' data?",
              "No. The scan only reads what's already publicly reachable from any visitor's browser, never writes or modifies anything, and doesn't store the data values it finds — only whether a table responded and how sensitive the response looked."),
+            ("Doesn't Supabase already have a free tool for this?",
+             "Yes — Supabase's own Security Advisor (Database → Security Advisor in your project dashboard) checks for similar things, for free. The difference: it lives inside a technical dashboard and assumes you can read SQL and policy rules. This scan is built for everyone else — you paste two values you already have, get a plain-language answer, and if something's wrong, a ready-to-paste SQL fix. No dashboard, no SQL knowledge required."),
         ]),
     },
 
