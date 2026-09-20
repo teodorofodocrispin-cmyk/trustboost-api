@@ -336,6 +336,77 @@ en estos supuestos genéricos.
 
 ---
 
+## 11. Diferenciación frente a la competencia (20 de septiembre de 2026)
+
+**La pregunta que originó esto:** ¿un usuario buscaría este modelo, existe
+competencia, y podría alguien simplemente hacer este mismo escaneo gratis
+con IA o con otra herramienta en vez de pagar $49?
+
+**Lo que se investigó y confirmó:**
+
+- **Supabase tiene su propio "Security Advisor" gratis**, integrado en el
+  dashboard de cada proyecto (Database → Security Advisor), basado en un
+  linter de código abierto llamado Splinter. Detecta tablas sin RLS,
+  políticas débiles y columnas sensibles expuestas — con soluciones de un
+  clic. Manda además correos semanales automáticos si hay problemas.
+  **Esto no es un competidor nuevo — ya existía, gratis, antes de este
+  producto.**
+- Existe además competencia indirecta más pequeña: al menos un
+  desarrollador independiente ofrece un checker gratis similar (basado en
+  pegar SQL manualmente) y otro vende un kit pago para bugs más profundos
+  de lógica de RLS (políticas que se cancelan entre sí, membresías mal
+  aisladas) que ni Supabase ni este producto detectan hoy.
+- **Técnicamente, sí, alguien con conocimiento de programación podría
+  pedirle a una IA que le escriba un script** que use su propia anon key
+  para probar nombres de tabla comunes — es exactamente lo que hace
+  `supabase_scanner.py`, no hay nada mágico ahí.
+
+**Por qué el negocio sigue siendo viable a pesar de esto:** el 63% de
+quienes hacen "vibe coding" no tiene formación de programación (dato de
+la sección de investigación de mercado). Esa persona no sabe qué es un
+"anon key", no sabría pedirle correctamente el script a una IA, no
+verificaría si el resultado está bien hecho, y — el punto más importante —
+**probablemente ni siquiera sabe que el Security Advisor de Supabase
+existe**, porque la promesa completa de herramientas como Lovable o
+Bolt.new es que el usuario nunca necesite abrir un dashboard técnico.
+
+**La conclusión, y por qué importa distinguirla bien:** la ventaja de este
+producto **no es la detección** (Supabase ya la resuelve gratis para quien
+sepa buscarla) — es la **distribución y la traducción**: llegar, vía SEO
+y contenido, a la mayoría no técnica del mercado que jamás abriría el
+dashboard de Supabase por su cuenta, y explicarle el hallazgo en lenguaje
+simple con el SQL exacto para copiar y pegar, en vez de una lista técnica
+de "Error/Warning/Info" que asume que sabes leer SQL.
+
+**Cambios aplicados como resultado (en `scan-landing.html`,
+`seo-template.html` y `seo_pages_data.py`):**
+
+1. Un cuarto ítem de confianza en la primera pantalla de las 10 páginas
+   (`/free-scan` + las 9 de `/check/{slug}`): *"No SQL or dashboard
+   needed"*.
+2. Una pregunta nueva en el FAQ de las 9 páginas de SEO, reconociendo
+   abiertamente que Supabase tiene su propio Security Advisor gratis y
+   explicando la diferencia de audiencia y de formato.
+3. Una sección de FAQ que no existía antes en `scan-landing.html` (la
+   página principal), con esa misma pregunta más "¿esto toca mi código o
+   mis datos?" — para que esta honestidad no viva solo en las páginas de
+   nicho.
+
+**Por qué se decidió decirlo primero, en vez de omitirlo:** mencionar la
+existencia del Security Advisor de Supabase antes de que alguien lo
+señale en un comentario público (por ejemplo en Hacker News) genera más
+confianza que si pareciera que se estaba ocultando. Es la misma lógica
+que ya se aplicó con la transparencia de precio (sección 5).
+
+**Si en el futuro se quiere profundizar la diferenciación real, no solo
+la de mensaje:** la vía más sólida sería agregar detección de los casos
+que ni Supabase ni este producto cubren hoy — bugs de *lógica* de RLS
+(políticas permisivas que cancelan una restrictiva, membresías de
+organización mal aisladas), no solo "RLS está apagado o encendido". Eso
+sí sería una ventaja técnica real, no solo de audiencia.
+
+---
+
 ## Cómo actualizar este documento
 
 Cuando se tome una decisión de negocio o de arquitectura (no un simple
