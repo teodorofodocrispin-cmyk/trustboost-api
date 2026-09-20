@@ -352,6 +352,7 @@
         <span><span class="trust-dot"></span>No signup</span>
         <span><span class="trust-dot"></span>Read-only</span>
         <span><span class="trust-dot"></span>Your code stays untouched</span>
+        <span><span class="trust-dot"></span>No SQL or dashboard needed</span>
       </div>
     </div>
 
@@ -461,6 +462,21 @@
       <li>We only check what's already publicly reachable from a browser</li>
       <li>The same classifier used here runs in production inside TrustBoost</li>
     </ul>
+  </div>
+</section>
+
+<section class="section" id="faq">
+  <div class="wrap">
+    <h2>Common questions, answered plainly.</h2>
+    <div class="trust-grid" style="grid-template-columns:1fr;">
+      <div>
+        <h3 style="font-size:1.02rem; margin:0 0 6px;">Doesn't Supabase already have a free tool for this?</h3>
+        <p style="color:var(--text-dim); font-size:0.92rem; margin:0 0 20px;">Yes — Supabase's own Security Advisor (Database → Security Advisor in your project dashboard) checks for similar things, for free. The difference: it lives inside a technical dashboard and assumes you can read SQL and policy rules. This scan is built for everyone else — you paste two values you already have, get a plain-language answer, and if something's wrong, a ready-to-paste SQL fix. No dashboard, no SQL knowledge required.</p>
+
+        <h3 style="font-size:1.02rem; margin:0;">Does this touch my code or my users' data?</h3>
+        <p style="color:var(--text-dim); font-size:0.92rem; margin:0;">No. The scan only reads what's already publicly reachable from any visitor's browser, never writes or modifies anything, and doesn't store the data values it finds — only whether a table responded and how sensitive the response looked.</p>
+      </div>
+    </div>
   </div>
 </section>
 
