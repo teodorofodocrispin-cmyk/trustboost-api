@@ -43,8 +43,6 @@ def _check_trial_rate_limit(ip: str) -> tuple[bool, int]:
     return False, minutes_left
 
 # ── Risk weights — server-side, deterministic ──────────────
-# Used to compute safety_score from the entity list returned by the model,
-# so scoring no longer depends on the model doing arithmetic correctly.
 RISK_WEIGHTS = {
     "CRITICAL": 0.40,
     "PRIVATE": 0.20,
@@ -62,18 +60,14 @@ PAYMENT_WALLET        = os.getenv("PAYMENT_WALLET")
 TRIAL_QUOTA           = int(os.getenv("TRIAL_QUOTA", "50"))
 PAID_QUOTA            = int(os.getenv("PAID_QUOTA", "10000"))
 REQUIRED_PAYMENT_USDC = int(os.getenv("REQUIRED_PAYMENT_USDC", "149"))
-PRICE_SANITIZE_PERCALL = os.getenv("PRICE_SANITIZE_PERCALL", "0.01")  # pay-per-call entry point (USDC)
+PRICE_SANITIZE_PERCALL = os.getenv("PRICE_SANITIZE_PERCALL", "0.01")
 PAYAI_FACILITATOR_URL  = os.getenv("PAYAI_FACILITATOR_URL", "https://facilitator.payai.network")
-# CDP Facilitator (Coinbase) — primario. El Bazaar de agentic.market (CDP Bazaar)
-# indexa SOLO endpoints que settlean via CDP. Sin esto TrustBoost no aparece en
-# agentic.market pese a pagos validos via PayAI. Replica el setup de VeraData/Intelica.
 CDP_FACILITATOR_URL   = os.getenv("CDP_FACILITATOR_URL", "https://api.cdp.coinbase.com/platform/v2/x402")
 CDP_API_KEY_ID        = os.getenv("CDP_API_KEY_ID", "").strip()
 CDP_API_KEY_SECRET    = os.getenv("CDP_API_KEY_SECRET", "")
-# DIAG (temporal): confirmar que las env vars CDP llegan al runtime.
 print(f"[DIAG] CDP_API_KEY_ID present: {bool(CDP_API_KEY_ID)}, CDP_API_KEY_SECRET present: {bool(CDP_API_KEY_SECRET)}")
-FLUXA_PROXY_SECRET     = os.getenv("FLUXA_PROXY_SECRET", "")  # aditivo: reconoce llamadas ya cobradas/liquidadas por FluxA Monetize
-WALLET_BASE             = os.getenv("WALLET_BASE", "0xCf1d31020A7915421f6d66B9835Dcb6f422337E7")  # shared wallet, same as VeraData/Intelica
+FLUXA_PROXY_SECRET     = os.getenv("FLUXA_PROXY_SECRET", "")
+WALLET_BASE             = os.getenv("WALLET_BASE", "0xCf1d31020A7915421f6d66B9835Dcb6f422337E7")
 USDC_BASE_CONTRACT      = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
@@ -92,12 +86,6 @@ app.add_middleware(
     ],
 )
 
-# ── x402 discovery middleware (aditivo) ──────────────────────────────────────
-# Intercepta las rutas de pago y devuelve 402 + PAYMENT-REQUIRED a requests sin
-# header de pago, ANTES de que FastAPI valide el body Pydantic (que daria 422).
-# Esto hace que sondeos de discovery (GET o POST sin body, como agentic.market /
-# x402-list) vean un 402 valido en vez de 422/405. Si el request trae header de
-# pago, se deja pasar al handler, que ya verifica y responde 402 si el pago falla.
 _PAYMENT_HEADERS = {"x-payment", "payment-signature", "x402-payment", "authorization"}
 _X402_PAID_ROUTES = {"/sanitize", "/redact", "/detect", "/sanitize/quick"}
 
@@ -172,13 +160,8 @@ response = requests.post(TRUSTBOOST_URL, json={
 
 if response.status_code == 402:
     payment_info = response.json()
-    # payment_info contains: payment_address, amount_usdc, network
-    # Send 149 USDC to payment_info["payment_address"] on Solana mainnet
-    # Use your Solana wallet to send the payment
-    # Save the transaction hash (tx_hash)
     tx_hash = "YOUR_SOLANA_TX_HASH_HERE"
 
-    # Step 2: Retry with tx_hash
     response = requests.post(TRUSTBOOST_URL, json={
         "text": "Contact John at john@company.com, SSN 123-45-6789",
         "wallet_address": "your-agent-wallet",
@@ -191,7 +174,6 @@ if response.status_code == 402:
     print(f"Sanitized: {sanitized}")
     print(f"Proof on Solana: {proof_tx}")
 
-# Trial mode (50 free sanitizations)
 trial_response = requests.post(TRUSTBOOST_URL, json={
     "text": "My email is test@example.com",
     "wallet_address": "your-agent-wallet",
@@ -312,10 +294,7 @@ Pipeline: TrustBoost /sanitize/quick → Intelica /intel → VeraData /sanctions
 
 @app.get("/.well-known/erc8004-agent.json")
 async def erc8004_agent_card():
-    """Agent card in ERC-8004 Identity Registry format (eip-8004#registration-v1).
-    Lets agents discover TrustBoost on the ERC-8004 Identity Registry (Base mainnet:
-    0x8004A169FB4a3325136EB29fA0ceB6D2e539a432) and link validation to the on-chain proof.
-    Additive: does not alter the existing Circle-format agent-card.json route."""
+    """Agent card in ERC-8004 Identity Registry format (eip-8004#registration-v1)."""
     return {
         "type": "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
         "name": "TrustBoost",
@@ -348,11 +327,7 @@ async def erc8004_agent_card():
 
 @app.get("/.well-known/agent-card.json")
 async def agent_card():
-    """
-    Circle Agent Stack compatible agent card.
-    Discoverable by autonomous AI agents in Circle Agent Marketplace.
-    Follows the emerging agent service discovery standard.
-    """
+    """Circle Agent Stack compatible agent card."""
     return {
         "schema_version": "v1",
         "name": "TrustBoost PII Sanitizer",
@@ -505,9 +480,6 @@ async def agent_card():
     }
 
 # ── A2A message/send endpoint ─────────────────────────────
-# Required for full A2A protocol conformance.
-# Allows any A2A-compatible orchestrator (LangGraph, CrewAI, AutoGen)
-# to invoke TrustBoost as a native agent in a multi-agent pipeline.
 
 class A2AMessagePart(BaseModel):
     type: str = "text"
@@ -525,13 +497,7 @@ class A2ASendRequest(BaseModel):
 
 @app.post("/message/send")
 async def a2a_message_send(req: A2ASendRequest, request: Request):
-    """A2A Protocol — message/send endpoint.
-    
-    Accepts A2A-formatted messages and runs PII sanitization.
-    Returns A2A-formatted response with sanitized text.
-    Compatible with: LangGraph, CrewAI, AutoGen, Google A2A orchestrators.
-    """
-    # Extract text from A2A message parts
+    """A2A Protocol — message/send endpoint."""
     text = ""
     for part in req.message.parts:
         if part.type == "text" and part.text:
@@ -553,13 +519,11 @@ async def a2a_message_send(req: A2ASendRequest, request: Request):
             }
         })
 
-    # Limit to 10K chars
     if len(text) > 10000:
         return JSONResponse(status_code=413, content={
             "error": {"code": -32001, "message": "Text exceeds 10,000 char limit. Split and retry."}
         })
 
-    # Run sanitization — TRIAL by default for A2A agents
     try:
         result = await gpt_sanitize(text, context="general")
         model_cleaned = result.get("cleaned_text", "") or ""
@@ -580,7 +544,6 @@ async def a2a_message_send(req: A2ASendRequest, request: Request):
         sanitized, _, _ = enforce_redaction(text, model_cleaned, entities_list)
         score, category = compute_score(entities_list)
 
-        # Log to audit — A2A calls use anonymous wallet
         await log_audit("A2A", len(text), sanitized, score, category, "a2a-agent", "A2A", "general")
 
         return JSONResponse(status_code=200, content={
@@ -648,11 +611,7 @@ HELIUS_API_KEY     = os.getenv("HELIUS_API_KEY", "")
 SOLANA_RPC_URL     = f"https://mainnet.helius-rpc.com/?api-key={HELIUS_API_KEY}" if HELIUS_API_KEY else "https://api.mainnet-beta.solana.com"
 
 async def anchor_proof_on_solana(wallet: str, score: float, category: str, text_length: int) -> str | None:
-    """
-    Anchor a Proof of Sanitization on Solana via a Memo transaction.
-    Returns the Solana transaction signature or None if unavailable.
-    Only runs for PAID users — never for TRIAL.
-    """
+    """Anchor a Proof of Sanitization on Solana via a Memo transaction."""
     if not SOLANA_SERVICE_KEY:
         return None
     try:
@@ -664,16 +623,13 @@ async def anchor_proof_on_solana(wallet: str, score: float, category: str, text_
         from solders.pubkey import Pubkey
         import httpx
 
-        # Build the proof hash
         timestamp = datetime.now(timezone.utc).isoformat()
         proof_data = f"{wallet}:{timestamp}:{score}:{category}:{text_length}"
         proof_hash = hashlib.sha256(proof_data.encode()).hexdigest()
 
-        # Decode the service keypair
         key_bytes = base58.b58decode(SOLANA_SERVICE_KEY)
         keypair = Keypair.from_bytes(key_bytes)
 
-        # Build Memo instruction
         MEMO_PROGRAM_ID = Pubkey.from_string("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr")
         memo_data = f"trustboost:proof:{proof_hash[:32]}".encode()
         memo_ix = Instruction(
@@ -682,7 +638,6 @@ async def anchor_proof_on_solana(wallet: str, score: float, category: str, text_
             data=memo_data
         )
 
-        # Get recent blockhash
         async with httpx.AsyncClient() as client:
             bh_response = await client.post(
                 SOLANA_RPC_URL,
@@ -692,11 +647,9 @@ async def anchor_proof_on_solana(wallet: str, score: float, category: str, text_
             bh_data = bh_response.json()
             recent_blockhash = bh_data["result"]["value"]["blockhash"]
 
-            # Build and sign transaction
             msg = Message.new_with_blockhash([memo_ix], keypair.pubkey(), recent_blockhash)
             tx = Transaction([keypair], msg, recent_blockhash)
 
-            # Send transaction
             tx_response = await client.post(
                 SOLANA_RPC_URL,
                 json={"jsonrpc": "2.0", "id": 1, "method": "sendTransaction", "params": [base58.b58encode(bytes(tx)).decode()]},
@@ -712,14 +665,9 @@ async def anchor_proof_on_solana(wallet: str, score: float, category: str, text_
         return None
 
 # ── Fase 1: Context-Aware Sanitization ────────────────────
-# Enum de contextos válidos
-
 VALID_CONTEXTS = {"general", "legal", "code", "financial", "medical"}
 
 # ── Fase 2: Privacy Budget por Agente ─────────────────────
-# Controla cuántas sanitizaciones puede hacer un operador por día.
-# Si el operador no tiene budget registrado → sin límite (comportamiento
-# idéntico a v2.3). Esto mantiene backward-compatibility total.
 
 async def get_agent_budget(operator_id: str) -> dict | None:
     """Retorna el budget activo del operador, o None si no existe."""
@@ -776,20 +724,12 @@ async def register_budget_usage(operator_id: str, context: str, audit_log_id: in
 
 
 async def check_budget(operator_id: str, context: str) -> tuple[bool, dict]:
-    """Verifica si el operador tiene budget disponible para esta request.
-
-    Retorna (is_allowed, budget_info).
-    Si el operador no tiene budget registrado → siempre permitido.
-    Si tiene budget y está agotado → bloqueado con 429.
-    Si tiene context_limit y el context no coincide → bloqueado con 403.
-    """
+    """Verifica si el operador tiene budget disponible para esta request."""
     budget = await get_agent_budget(operator_id)
 
     if budget is None:
-        # Sin budget registrado — sin límite, comportamiento v2.3
         return True, {"budget_active": False}
 
-    # Verificar restricción de contexto
     ctx_limit = budget.get("context_limit")
     if ctx_limit and ctx_limit != context:
         return False, {
@@ -799,7 +739,6 @@ async def check_budget(operator_id: str, context: str) -> tuple[bool, dict]:
             "requested_context": context,
         }
 
-    # Verificar límite diario
     used_today = await get_budget_used_today(operator_id)
     daily_limit = budget.get("daily_limit", 100)
     remaining = daily_limit - used_today
@@ -821,10 +760,8 @@ async def check_budget(operator_id: str, context: str) -> tuple[bool, dict]:
         "remaining_today": remaining,
     }
 
-# Addenda de contexto — se inyectan AL FINAL del system_prompt base.
-# El prompt base no se toca. Solo se extiende.
 CONTEXT_ADDENDA: dict[str, str] = {
-    "general": "",  # Sin addendum — comportamiento idéntico al original
+    "general": "",
 
     "legal": """
 ## CONTEXT OVERRIDE: LEGAL
@@ -928,20 +865,11 @@ ESCALATION: Co-occurrence of diagnosis + patient name + date of birth in the sam
 
 
 def _build_system_prompt(context: str) -> str:
-    """Returns the full system prompt for gpt-4o-mini.
-
-    Strategy: keep the original prompt 100% intact (it is battle-tested and
-    production-grade). Append the context addendum at the end so the model
-    reads domain rules AFTER the universal rules — consistent with how GPT
-    processes long system prompts (recency bias toward the end).
-    The general context has an empty addendum, making the call identical to
-    the original v2.2 behavior.
-    """
+    """Returns the full system prompt for gpt-4o-mini."""
     addendum = CONTEXT_ADDENDA.get(context, "")
     return SYSTEM_PROMPT_BASE + addendum
 
 
-# ── Original system prompt — UNMODIFIED from v2.2 ─────────
 SYSTEM_PROMPT_BASE = """You are TrustBoost AI Sanitizer — a precision PII redaction engine for autonomous AI agent pipelines. Your sole function is to detect and neutralize Personally Identifiable Information before it reaches LLM providers.
 
 ## CORE DIRECTIVE
@@ -1159,21 +1087,14 @@ Empty input schema:
 
 
 class SanitizeRequest(BaseModel):
-    text: Optional[str] = None   # Optional — empty body triggers x402 payment response
+    text: Optional[str] = None
     tx_hash: Optional[str] = None
     wallet_address: Optional[str] = None
-    context: str = "general"  # ← Fase 1: opcional, default general, 100% backward-compatible
+    context: str = "general"
 
 
 class Entity(BaseModel):
-    """A single PII entity detected in the input.
-
-    `type` is a short machine-friendly label (e.g. "email", "aws_access_key",
-    "jp_my_number", "jp_full_name"). `category` is the risk tier used for
-    scoring. `redacted_text` is the original substring that was replaced with
-    [REDACTED]; it is returned so callers can audit *what* was removed without
-    having to diff input vs output. Callers that don't need it can ignore it.
-    """
+    """A single PII entity detected in the input."""
     type: str
     category: Literal["CRITICAL", "PRIVATE", "SENSITIVE"]
     redacted_text: str
@@ -1210,8 +1131,8 @@ async def check_replay(tx_hash: str) -> bool:
             params={"tx_hash": f"eq.{tx_hash}", "select": "tx_hash"}
         )
         if r.status_code == 200 and len(r.json()) > 0:
-            return True  # Ya existe — no es replay, es reutilización válida
-        return False  # No existe — primer uso
+            return True
+        return False
 
 async def register_tx_hash(tx_hash: str):
     """Registra el tx_hash en used_tx la primera vez."""
@@ -1268,16 +1189,8 @@ async def helius_verify(tx_hash: str) -> tuple[bool, float]:
     return False, 0
 
 
-# ── BASE (eip155:8453) on-chain verify — mirrors helius_verify for Solana ──
-# ADDITIVE: parallel Base prepaid path. Reuses x402_direct_verify (already
-# validated against real mainnet tx). No Solana/Helius logic touched.
 async def base_verify(tx_hash: str) -> tuple[bool, float]:
-    """Verify a 149 USDC prepaid ERC-20 transfer to WALLET_BASE on Base.
-    Mirrors helius_verify's contract: returns (is_valid, amount_usdc).
-    Additive prepaid path only — pay-per-call (0.01) is handled separately by
-    verify_payment_percall's on-chain branch. Falls back to False if the on-chain
-    module is unavailable or RPC fails.
-    """
+    """Verify a 149 USDC prepaid ERC-20 transfer to WALLET_BASE on Base."""
     try:
         import sys as _sys, os as _os
         _here = _os.path.dirname(_os.path.abspath(__file__))
@@ -1293,16 +1206,8 @@ async def base_verify(tx_hash: str) -> tuple[bool, float]:
         return False, 0.0
 
 
-# ── GPT-4o-mini: sanitización multilingüe + context-aware ──
 def _failsafe_result(original_text: str) -> dict:
-    """The one, single-source-of-truth failsafe shape: redact the entire
-    input as a single CRITICAL entity. Used by BOTH failure paths below --
-    a malformed/unparseable OpenAI response (_parse_model_json) and an
-    OpenAI API call that fails outright (gpt_sanitize's except block).
-    Extracted so the two paths can never drift apart the way the client-
-    side tutorial fix and this server had already drifted before this
-    audit (2026-08-28) -- one function, one shape, both callers.
-    """
+    """The one, single-source-of-truth failsafe shape."""
     return {
         "status": "success",
         "cleaned_text": "[REDACTED]",
@@ -1317,26 +1222,7 @@ def _failsafe_result(original_text: str) -> dict:
 
 
 async def gpt_sanitize(text: str, context: str = "general") -> dict:
-    """Sanitize text using the context-specific system prompt.
-
-    Fase 1 change: accepts an optional `context` parameter that injects a
-    domain-specific addendum AFTER the base prompt. The base prompt is
-    100% unchanged from v2.2 — only the addendum is new. When context is
-    'general' (default), the addendum is empty and behavior is identical
-    to v2.2. All other logic (enforce_redaction, scoring, failsafe) is
-    unaffected.
-
-    Fase 5 (2026-08-28, found during a cross-repo audit of the client-side
-    tutorial fixes made the same day): the OpenAI call itself was never
-    wrapped in a try/except. `_parse_model_json` below already fails safe
-    on a malformed/garbage RESPONSE from OpenAI -- but a call that never
-    gets a response at all (rate limit, timeout, connection error, auth
-    failure) was previously unhandled and would 500 the whole request
-    instead of failing closed. Now both failure modes -- "OpenAI responded
-    with garbage" and "OpenAI never responded" -- produce the identical
-    failsafe shape via _failsafe_result(), so downstream handling (the
-    `is_failsafe` check in the /sanitize route) treats them the same way.
-    """
+    """Sanitize text using the context-specific system prompt."""
     system_prompt = _build_system_prompt(context)
     try:
         r = await openai_client.chat.completions.create(
@@ -1357,17 +1243,7 @@ async def gpt_sanitize(text: str, context: str = "general") -> dict:
 
 
 def _parse_model_json(raw: str, original_text: str) -> dict:
-    """Parse the model's JSON response defensively.
-
-    OpenAI's `response_format=json_object` constraint should already make
-    `raw` a JSON object, but a malformed response should never 500 the API —
-    sanitization failures must fail SAFE (treat the whole input as unredacted
-    PII) rather than risk leaking it. Strategy:
-      1. Try strict json.loads.
-      2. Fall back to extracting the first {...} block.
-      3. Final fallback: redact the entire input as a single CRITICAL entity.
-         Intentionally conservative — over-redact rather than silently leak.
-    """
+    """Parse the model's JSON response defensively."""
     try:
         return json.loads(raw)
     except Exception:
@@ -1382,61 +1258,14 @@ def _parse_model_json(raw: str, original_text: str) -> dict:
     return _failsafe_result(original_text)
 
 
-# ── Server-side redaction enforcer ──────────────────────
-#
-# Why this exists:
-#   The model returns two things that have to agree: `cleaned_text` (the
-#   redacted string) and `entities` (the list of what was redacted). In
-#   practice they sometimes disagree — the model can correctly identify an
-#   entity in `entities` but fail to actually replace it in `cleaned_text`,
-#   producing a sanitized_content that still leaks PII while the audit trail
-#   says everything's fine. That's worse than no audit trail.
-#
-# What it does:
-#   For every entity whose `redacted_text` is a non-empty substring of the
-#   ORIGINAL input, replace ALL occurrences with [REDACTED] in cleaned_text.
-#   Long entities are processed first so a phone number is not partially
-#   eaten by an overlapping shorter entity.
-#
-# Conservative redaction:
-#   If `田中太郎` appears twice in the input, both occurrences are replaced.
-#   The same `redacted_text` listed twice in `entities` is fine; replacement
-#   is idempotent (`[REDACTED]` cannot match any entity literally).
-#
-# Telemetry:
-#   Returns a `redaction_source` string: "server" if the enforcer had to
-#   replace anything the model missed, "model" if the model and server agree.
-#   The `fallback_full_redaction` value is set elsewhere (in the handler)
-#   when the failsafe parser triggers — the enforcer never sets it.
-#
-# Failure modes:
-#   - Empty `redacted_text`: skipped (can't replace nothing).
-#   - `redacted_text` not present in original input: returned in
-#     `unmatched_entities` so callers can audit. The model probably
-#     paraphrased the redacted_text or hallucinated; the entity is still
-#     reported (and counts toward the score) but cannot be enforced from text.
-
 def enforce_redaction(
     original_text: str,
     model_cleaned_text: str,
     entities: list,
 ) -> tuple[str, str, list]:
-    """Apply entity list to original text; return (cleaned_text, source, unmatched).
-
-    `source` is "model" when the server-enforced cleaned_text matches what
-    the model produced (i.e. the model already did the redaction correctly),
-    or "server" when the enforcer had to fix one or more leaks.
-
-    `unmatched` is a list of entity dicts whose `redacted_text` could not be
-    located verbatim in the original input. They still appear in the main
-    `entities` list and still count toward the safety score; this auxiliary
-    list exists so callers can detect model paraphrasing or hallucination.
-    """
+    """Apply entity list to original text; return (cleaned_text, source, unmatched)."""
     REDACTED = "[REDACTED]"
 
-    # Sort by descending length so longer entities are replaced first.
-    # This matters when one entity's text contains another's (e.g. a full
-    # phone number that includes a country-code substring also flagged).
     targets = sorted(
         (e for e in entities if isinstance(e, dict) and (e.get("redacted_text") or "")),
         key=lambda e: len(e.get("redacted_text") or ""),
@@ -1450,30 +1279,19 @@ def enforce_redaction(
     for ent in targets:
         needle = ent.get("redacted_text") or ""
         if needle in seen_targets:
-            continue  # already replaced this exact substring on a prior pass
+            continue
         seen_targets.add(needle)
         if needle in original_text:
-            # Replace ALL occurrences — conservative redaction. If 田中太郎
-            # appears twice in the original, both are scrubbed.
             cleaned = cleaned.replace(needle, REDACTED)
         else:
-            # Model said it redacted X but X never appears in the input.
-            # Could be paraphrasing, normalization, or hallucination.
             unmatched.append(ent)
 
     source = "model" if cleaned == model_cleaned_text else "server"
     return cleaned, source, unmatched
 
 
-# ── Server-side scoring ───────────────────────────────────
-
 def compute_score(entities: list) -> tuple[float, str]:
-    """Compute (safety_score, risk_category) deterministically from entities.
-
-    Score: sum of per-category weights, capped at 1.0.
-    Category: highest-severity tier with at least one entity, or "CLEAN".
-    Unknown categories are treated as SENSITIVE (conservative).
-    """
+    """Compute (safety_score, risk_category) deterministically from entities."""
     if not entities:
         return 0.0, "CLEAN"
     score = 0.0
@@ -1485,19 +1303,13 @@ def compute_score(entities: list) -> tuple[float, str]:
         score += RISK_WEIGHTS[cat]
         seen.add(cat)
     score = min(round(score, 4), 1.0)
-    for tier in RISK_ORDER:  # CRITICAL > PRIVATE > SENSITIVE
+    for tier in RISK_ORDER:
         if tier in seen:
             return score, tier
     return score, "SENSITIVE"
 
-# ── Audit trail en Supabase ────────────────────────────────
-
 async def log_audit(tx_hash, length, sanitized, score, category, wallet, license_type, context="general") -> int | None:
-    """Log sanitization to audit_log. Returns the new row id for budget linkage.
-
-    Fase 1: added `context` parameter.
-    Fase 2: returns audit_log id so budget_usage can reference it.
-    """
+    """Log sanitization to audit_log. Returns the new row id for budget linkage."""
     async with httpx.AsyncClient() as client:
         r = await client.post(
             f"{SUPABASE_URL}/rest/v1/audit_log",
@@ -1520,8 +1332,6 @@ async def log_audit(tx_hash, length, sanitized, score, category, wallet, license
                 return rows[0].get("id")
         return None
 
-# ── Health check ───────────────────────────────────────────
-
 @app.get("/health")
 async def health():
     return JSONResponse(
@@ -1535,17 +1345,10 @@ async def health():
         }
     )
 
-# ── Endpoint principal ─────────────────────────────────────
-
 @app.get("/verify/{anchor_tx}")
 async def verify_proof(anchor_tx: str):
-    """
-    Public endpoint to verify a Proof of Sanitization anchor on Solana.
-    Anyone can verify that a sanitization occurred at a specific time.
-    No authentication required — the proof is public and immutable.
-    """
+    """Public endpoint to verify a Proof of Sanitization anchor on Solana."""
     try:
-        # Check if anchor exists in audit_log
         async with httpx.AsyncClient() as client:
             r = await client.get(
                 f"{SUPABASE_URL}/rest/v1/audit_log",
@@ -1586,18 +1389,6 @@ async def verify_proof(anchor_tx: str):
             content={"status": "error", "message": "Verification failed — please try again"}
         )
 
-# ── x402 Payment Protocol Support ─────────────────────────
-# When an agent calls /sanitize without a valid tx_hash,
-# TrustBoost responds with HTTP 402 Payment Required
-# containing all the information the agent needs to pay
-# autonomously and retry — no human intervention required.
-
-# ─── Pay-Per-Call x402 Verification (standard verify/settle flow) ─────────────
-# This is the LOW-FRICTION entry point for autonomous agents — standard x402 v2
-# verify/settle via PayAI facilitator, accepting both PAYMENT-SIGNATURE (v2) and
-# X-PAYMENT (v1 legacy) headers. Coexists with the existing TRIAL and prepaid
-# 149 USDC quota system below — this does NOT replace them.
-
 import base64 as _b64_pc
 import httpx as _httpx_pc
 
@@ -1605,17 +1396,10 @@ USDC_SOLANA_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 
 
 async def verify_payment_percall(x_payment: str, price_usdc: str = None, resource_url: str = None) -> tuple[bool, str]:
-    """
-    Verify a single x402 payment via PayAI facilitator.
-    Supports both Base mainnet and Solana mainnet — detects network from the
-    client's payment_payload and verifies against the matching requirements.
-    Returns (is_valid, payer_wallet_address).
-    Does not touch the existing TRIAL/prepaid-quota system.
-    """
+    """Verify a single x402 payment via PayAI facilitator."""
     if not x_payment:
         return False, ""
 
-    # Defensive: callers may pass a FastAPI Header object, not a str.
     x_payment = str(x_payment) if x_payment is not None else ""
     if not x_payment:
         return False, ""
@@ -1624,18 +1408,15 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None, resourc
     amount = str(int(float(price) * 1_000_000))
     try:
         _raw = x_payment.strip()
-        # Strip any x402 / x- scheme prefix (case-insensitive)
         if _raw.lower().startswith("x402 "):
             _raw = _raw[len("x402 "):].strip()
         elif _raw.lower().startswith("x-"):
             _raw = _raw[2:].strip()
-        # Tolerant decode: drop anything that is not ASCII base64, then re-pad.
         import re as _re
         _b64_clean = _re.sub(r"[^A-Za-z0-9+/=]", "", _raw)
         _pad = (-len(_b64_clean)) % 4
         _b64_clean += "=" * _pad
         _decoded = _b64_pc.b64decode(_b64_clean)
-        # Be resilient to stray non-UTF8 bytes (e.g. copy/paste artifacts)
         try:
             _json_str = _decoded.decode("utf-8")
         except UnicodeDecodeError:
@@ -1645,10 +1426,6 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None, resourc
         print(f"TrustBoost: failed to decode payment token: {e}")
         return False, ""
 
-    # Detect which network the client signed for. Clientes x402 v2 reales (ej.
-    # agentcash) no ponen "network" en la raiz del payload -- lo mandan anidado
-    # dentro de "accepted" (el objeto que eligieron de accepts[] en el 402).
-    # Revisar ambos lugares evita probar redes que el cliente nunca firmo.
     client_network = payment_payload.get("network") or payment_payload.get("accepted", {}).get("network", "")
 
     NETWORK_CONFIGS = {
@@ -1664,10 +1441,6 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None, resourc
         },
     }
 
-    # ── DIRECT ON-CHAIN VERIFY (additive; parallel to PayAI facilitator) ─────
-    # If the envelope carries a real on-chain transactionHash (an agent that paid
-    # USDC directly to our wallet), verify it against the chain RPC — no PayAI
-    # JWT required. Falls through to PayAI below if no tx_hash is present.
     try:
         import sys as _sys, os as _os
         _here = _os.path.dirname(_os.path.abspath(__file__))
@@ -1689,8 +1462,6 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None, resourc
     except Exception as _e:
         print(f"TrustBoost: direct on-chain verify skipped: {type(_e).__name__}: {str(_e)[:80]}")
 
-    # If client specified a known network, verify only that one.
-    # Otherwise (legacy clients), try Solana first (original default), then Base.
     networks_to_try = [client_network] if client_network in NETWORK_CONFIGS else list(NETWORK_CONFIGS.keys())
 
     for network in networks_to_try:
@@ -1704,10 +1475,6 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None, resourc
             "maxTimeoutSeconds": 300,
             "extra": cfg["extra"],
         }
-        # Strip any "extensions" (e.g. bazaar) the client may have echoed back from
-        # the 402 discovery response — PayAI's /verify strictly validates extension
-        # shape (requires "type": "http" etc.) and rejects malformed echoes.
-        # Extensions belong in discovery responses, not in payment verification.
         clean_payment_payload = {k: v for k, v in payment_payload.items() if k != "extensions"}
 
         full_payload = {**clean_payment_payload, "accepted": requirements}
@@ -1717,8 +1484,6 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None, resourc
             "paymentRequirements": requirements,
         }
 
-        # Facilitators: CDP primero (indexa en el Bazaar de agentic.market),
-        # PayAI como fallback. Replica el setup de VeraData/Intelica.
         facilitators = []
         if CDP_API_KEY_ID and CDP_API_KEY_SECRET:
             facilitators.append({"url": CDP_FACILITATOR_URL, "name": "cdp", "auth": "cdp"})
@@ -1734,8 +1499,6 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None, resourc
                         _pem = CDP_API_KEY_SECRET.strip().replace("\\n", "\n")
                         if not _pem.endswith("\n"):
                             _pem += "\n"
-                        # Carga la key (maneja SEC1 EC y RSA) y pasa el OBJETO a jwt.encode
-                        # (replica _build_cdp_jwt de VeraData/Intelica, que SI funciona).
                         _private_key = _ser.load_pem_private_key(_pem.encode("utf-8"), password=None)
                         _uri = f"POST api.cdp.coinbase.com{_url_path(fac['url'])}/verify"
                         _now = int(_time.time())
@@ -1757,18 +1520,8 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None, resourc
                     )
                 if resp.status_code == 200 and resp.json().get("isValid", False):
                     payer = payment_payload.get("payload", {}).get("authorization", {}).get("from", "")
-                    # FIX (aditivo): antes, un verify exitoso nunca llamaba a /settle -- la
-                    # logica de settle (con reintentos + extension bazaar) solo estaba
-                    # dentro del camino de verify FALLIDO, y ademas ahi mismo se saltaba
-                    # para CDP con un "continue" -- o sea, CDP nunca liquidaba nada, ni
-                    # siquiera cuando el pago era 100% valido. Se agrega aqui el settle
-                    # real tras un verify exitoso, replicando la misma logica ya probada.
                     settle_ok = False
                     last_err = ""
-                    # JWT propio para /settle (distinto path que /verify) -- reutilizar
-                    # los headers de /verify aqui era el bug: CDP valida el claim "uri"
-                    # del JWT contra el path exacto de la request, y rechaza con 401
-                    # cuando no coincide.
                     settle_headers_main = dict(headers)
                     settle_body = verify_body
                     if fac["auth"] == "cdp":
@@ -1790,12 +1543,6 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None, resourc
                             settle_headers_main["Authorization"] = f"Bearer {_jwt0}"
                         except Exception as _je0:
                             print(f"TrustBoost CDP settle (main) JWT failed: {_je0}")
-                        # CDP Bazaar indexing: el settle debe llevar resource.url +
-                        # extensions.bazaar en el paymentPayload. FIX: armar esto ANTES
-                        # de la unica llamada a /settle -- un mismo nonce EIP-3009 no se
-                        # puede settlear dos veces (una llamada sin bazaar y otra con
-                        # bazaar sobre el mismo nonce falla: "authorization nonce already
-                        # submitted; transaction already on-chain").
                         if resource_url:
                             try:
                                 _bazaar_ext = {
@@ -1859,14 +1606,13 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None, resourc
                     print(f"TrustBoost settle OK via {fac['name']} (payer={payer})")
                     return True, payer
                 else:
-                    # CDP /verify rechazó el pago -> log para debug (VeraData hace esto)
                     try:
                         _cdp_body = resp.json()
                     except Exception:
                         _cdp_body = resp.text[:200]
                     print(f"TrustBoost CDP verify FAILED: {resp.status_code} {_cdp_body}")
                     if fac["name"] == "cdp":
-                        continue  # no usar fallback payai si CDP es el facilitador primario y falló validate
+                        continue
                     last_err = ""
                     for _attempt in range(2):
                         try:
@@ -1878,9 +1624,6 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None, resourc
                                 )
                             if sresp.status_code == 200:
                                 settle_ok = True
-                                # CDP Bazaar indexing: el settle debe llevar resource.url +
-                                # extensions.bazaar en el paymentPayload (no solo verify).
-                                # Replica el setup de VeraData/Intelica.
                                 if fac["auth"] == "cdp" and resource_url:
                                     try:
                                         _bazaar_ext = {
@@ -1918,7 +1661,6 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None, resourc
                                             "paymentPayload": _full_payload_with_resource,
                                             "paymentRequirements": requirements,
                                         }
-                                        # JWT CDP propio para /settle (path distinto a /verify)
                                         _settle_headers = {"Content-Type": "application/json"}
                                         try:
                                             import secrets as _sec2, time as _t2, jwt as _j2
@@ -1954,7 +1696,7 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None, resourc
                         print(f"TrustBoost settle ({fac['name']}) attempt {_attempt+1} failed: {last_err}")
                     if not settle_ok:
                         print(f"TrustBoost settle ({fac['name']}) FAILED: {last_err}")
-                        continue  # prueba el siguiente facilitador
+                        continue
                     print(f"TrustBoost settle OK via {fac['name']} (payer={payer})")
                     return True, payer
             except Exception as e:
@@ -2093,14 +1835,6 @@ X402_PAYMENT_INFO = {
     },
     "extensions": {
         "bazaar": {
-            # v2.7 (aditivo) — pendiente de sesion 001 (Bug 3): PayAI valida
-            # estrictamente el shape de CUALQUIER extension presente en el
-            # payload de verify. El fix real (que ya funciona) es no reenviar
-            # "extensions" al verificar (ver clean_payment_payload en
-            # verify_payment_percall). Este "type": "http" es una capa
-            # defensiva adicional para clientes de terceros que no hagan ese
-            # stripping y le peguen a /verify con el bazaar completo tal como
-            # se los devolvimos aqui en el discovery.
             "type": "http",
             "info": {
                 "name": "TrustBoost PII Sanitizer",
@@ -2160,9 +1894,7 @@ X402_METHOD_HEADERS = {
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    """Return 402 instead of 422 when /sanitize or /redact receive an invalid/missing body.
-    Allows x402 validators (agentic.market, x402-list) to discover payment
-    requirements without a valid payload."""
+    """Return 402 instead of 422 when /sanitize or /redact receive an invalid/missing body."""
     if request.url.path in ["/sanitize", "/redact"]:
         import base64, json
         return JSONResponse(
@@ -2192,9 +1924,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 @app.get("/sanitize")
 async def sanitize_discovery(request: Request):
-    """GET /sanitize — x402 Bazaar discovery endpoint.
-    Returns 402 with PAYMENT-REQUIRED header for validator crawlers.
-    """
+    """GET /sanitize — x402 Bazaar discovery endpoint."""
     import base64, json as _json
     return JSONResponse(
         status_code=402,
@@ -2222,15 +1952,8 @@ async def sanitize(
     x_payment: Optional[str] = Header(default=None, alias="X-PAYMENT"),
     payment_signature: Optional[str] = Header(default=None, alias="PAYMENT-SIGNATURE"),
 ):
-    x_payment = payment_signature or x_payment  # prefer x402 v2 PAYMENT-SIGNATURE, fallback to legacy X-PAYMENT
+    x_payment = payment_signature or x_payment
 
-    # ── Pay-per-call entry point (standard x402 verify/settle) ────────────────
-    # If the agent sent a PAYMENT-SIGNATURE/X-PAYMENT header, verify it as a
-    # single per-call payment via PayAI facilitator. This is independent of
-    # the TRIAL/tx_hash/prepaid-quota system below — both paths coexist.
-    # Robust header capture (case-insensitive; covers Cloudflare/proxy stripping
-    # non-standard headers like X-Payment). Fallback chain: FastAPI alias,
-    # then raw request.headers lookups.
     if not x_payment:
         x_payment = (
             request.headers.get("x-payment")
@@ -2239,17 +1962,12 @@ async def sanitize(
         )
     percall_payer = None
     if x_payment and (not req.text or not req.text.strip()):
-        # Payment header present but no text yet — this is a probe/discovery call,
-        # not an actual payment attempt. Fall through to normal 402 flow below.
         pass
     elif x_payment:
         _valid, percall_payer = await verify_payment_percall(x_payment, PRICE_SANITIZE_PERCALL, str(request.url))
         if not _valid:
             return JSONResponse(status_code=402, content={"status": "payment_verification_failed", "message": "x402 payment could not be verified."})
-        # Payment verified — skip TRIAL/tx_hash checks entirely, proceed straight to sanitization
 
-    # Validación básica
-    # Si no hay texto y no hay tx_hash → responder 402 para x402 discovery
     if not req.text or not req.text.strip():
         if not req.tx_hash or req.tx_hash.strip() == "":
             import base64, json as _json
@@ -2276,7 +1994,6 @@ async def sanitize(
             )
         return JSONResponse(status_code=200, content={"status": "empty_input"})
 
-    # ── Límite de caracteres por request ──────────────────────
     MAX_CHARS = 10000
     text_length = len(req.text)
 
@@ -2306,18 +2023,12 @@ async def sanitize(
             }
         )
 
-    # Fase 1: validar y normalizar context
     context = req.context.lower().strip() if req.context else "general"
     if context not in VALID_CONTEXTS:
-        context = "general"  # fallback silencioso — no rompe clientes existentes
+        context = "general"
 
     wallet = percall_payer or req.wallet_address or "anonymous"
 
-    # ── x402 Payment Protocol ─────────────────────────────
-    # If no tx_hash provided → return 402 with payment info
-    # This allows autonomous agents to discover payment terms
-    # and pay without human intervention (x402 standard)
-    # Skip this whole tx_hash/quota check if pay-per-call already verified the request.
     if not percall_payer and (not req.tx_hash or req.tx_hash.strip() == ""):
         return JSONResponse(
             status_code=402,
@@ -2352,8 +2063,6 @@ async def sanitize(
             }
         )
 
-    # ── Fase 2: verificar privacy budget ──────────────────
-    # El operator_id es la wallet. Sin wallet → sin budget (anónimo).
     budget_allowed, budget_info = await check_budget(wallet, context)
     if not budget_allowed:
         err = budget_info.get("error")
@@ -2367,7 +2076,6 @@ async def sanitize(
                     "budget": budget_info,
                 }
             )
-        # daily_limit_reached
         return JSONResponse(
             status_code=429,
             content={
@@ -2378,13 +2086,10 @@ async def sanitize(
             }
         )
 
-    # ── Modo pay-per-call (already verified above) ────────
-    # Skip TRIAL/quota/prepaid logic entirely — payment already confirmed via PayAI.
     if percall_payer:
         quota_remaining = None
         license_type = "Pay-per-call (x402)"
 
-    # ── Modo TRIAL ─────────────────────────────────────────
     elif req.tx_hash.upper() == "TRIAL":
         used = await get_trial_count(wallet)
         if used >= TRIAL_QUOTA:
@@ -2416,12 +2121,10 @@ async def sanitize(
         quota_remaining = TRIAL_QUOTA - (used + 1)
         license_type = "TRIAL"
 
-    # ── Modo PAGADO ────────────────────────────────────────
     else:
         tx_exists = await check_replay(req.tx_hash)
 
         if tx_exists:
-            # tx_hash ya verificado antes — solo contar uso
             paid_used = await get_paid_count(req.tx_hash)
             if paid_used >= PAID_QUOTA:
                 return JSONResponse(
@@ -2446,8 +2149,6 @@ async def sanitize(
             quota_remaining = PAID_QUOTA - (paid_used + 1)
 
         else:
-            # Primer uso de este tx_hash — verificar pago on-chain.
-            # ADDITIVE: route by network. Base tx = "0x"+64hex; Solana = base58 signature.
             _tx = (req.tx_hash or "").strip()
             _is_base = _tx.lower().startswith("0x") and len(_tx) == 66 and all(
                 c in "0123456789abcdef" for c in _tx[2:])
@@ -2475,34 +2176,28 @@ async def sanitize(
                         ]
                     }
                 )
-            # Pago verificado — registrar tx_hash
             await register_tx_hash(req.tx_hash)
             quota_remaining = PAID_QUOTA - 1
 
         await increment_paid(req.tx_hash)
         license_type = "Enterprise - 149 USDC"
 
-        # ── Fase 4: Proof of Sanitization on Solana ────────
-        # Fire-and-forget — never blocks the sanitization response
         import asyncio
         asyncio.create_task(
             anchor_proof_on_solana(
                 wallet=wallet,
-                score=0.0,  # preliminary — updated after scoring
+                score=0.0,
                 category="PENDING",
                 text_length=len(req.text)
             )
         )
 
-    # ── Sanitización — Fase 1: pasar context ───────────────
-    result = await gpt_sanitize(req.text, context)  # ← context aquí
+    result = await gpt_sanitize(req.text, context)
     if result.get("status") == "empty_input":
         return JSONResponse(status_code=200, content={"status": "empty_input"})
 
     model_cleaned = result.get("cleaned_text", "") or ""
 
-    # Normalize entity list: tolerate the model omitting it, returning a dict
-    # instead of a list, or returning entries with missing fields.
     raw_entities = result.get("entities")
     entities_list: list = []
     if isinstance(raw_entities, list):
@@ -2518,9 +2213,6 @@ async def sanitize(
                 "redacted_text": str(ent.get("redacted_text") or ""),
             })
 
-    # Detect failsafe path — the parser sets a single sanitizer_failsafe
-    # entity covering the whole input. Don't run the enforcer in that case;
-    # the failsafe `cleaned_text` is already "[REDACTED]".
     is_failsafe = (
         len(entities_list) == 1
         and entities_list[0].get("type") == "sanitizer_failsafe"
@@ -2537,27 +2229,19 @@ async def sanitize(
             entities=entities_list,
         )
 
-    # Server-side score — deterministic, computed from entity list.
     score, category = compute_score(entities_list)
     entities_removed = len(entities_list) > 0
 
-    # ── Audit trail — Fase 1: context / Fase 2: retorna id ─
     audit_id = await log_audit(
         req.tx_hash, len(req.text), sanitized, score, category,
         wallet, license_type, context
     )
 
-    # ── Fase 2: registrar consumo de budget ────────────────
     if budget_info.get("budget_active"):
         await register_budget_usage(wallet, context, audit_id)
-        # Actualizar remaining tras el consumo
         budget_info["remaining_today"] = max(0, budget_info.get("remaining_today", 1) - 1)
         budget_info["used_today"] = budget_info.get("used_today", 0) + 1
 
-    # ── Respuesta final ────────────────────────────────────
-    # Backwards-compatible. New fields (Fase 1): context_applied
-    # New fields (Fase 2): budget (solo si el operador tiene budget activo)
-    # Fase 4 — anchor on-chain para usuarios PAID
     solana_anchor = None
     if license_type != "TRIAL":
         try:
@@ -2567,7 +2251,6 @@ async def sanitize(
                 category=category,
                 text_length=len(req.text)
             )
-            # Guardar anchor en audit_log
             if solana_anchor and audit_id:
                 async with httpx.AsyncClient() as client:
                     await client.patch(
@@ -2628,7 +2311,6 @@ async def sanitize(
     )
 
 
-# ── v2.7 (aditivo): /sanitize/quick — x402 v2 pay-per-call UNICAMENTE ──────
 class QuickSanitizeRequest(BaseModel):
     text: Optional[str] = None
     context: str = "general"
@@ -2642,16 +2324,7 @@ async def sanitize_quick(
     payment_signature: Optional[str] = Header(default=None, alias="PAYMENT-SIGNATURE"),
     x_fluxa_secret: Optional[str] = Header(default=None, alias="X-FLUXA-SECRET"),
 ):
-    """POST /sanitize/quick — x402 v2 pay-per-call only ($0.01 USDC, Base
-    preferido, Solana alterno). No TRIAL, no tx_hash, no bundle prepago.
-    Reutiliza la misma logica de sanitizacion que /sanitize sin modificarla.
-
-    Aditivo: si llega X-FLUXA-SECRET valido, la llamada viene del proxy de
-    FluxA Monetize, que ya cobro y liquido el pago USDC antes de reenviar
-    esta request (FluxA elimina el header X-Payment antes de reenviar).
-    En ese caso se omite la verificacion x402 propia para evitar un doble
-    cobro / 402 espurio.
-    """
+    """POST /sanitize/quick — x402 v2 pay-per-call only."""
     x_payment = payment_signature or x_payment
     is_fluxa_proxied = bool(FLUXA_PROXY_SECRET) and x_fluxa_secret == FLUXA_PROXY_SECRET
 
@@ -2763,8 +2436,6 @@ async def sanitize_quick(
     )
 
 
-# ── Fase 2: Endpoint de consulta de budget ─────────────────
-
 @app.get("/budget/{operator_id}")
 async def get_budget_status(operator_id: str):
     """Consulta el estado del privacy budget de un operador."""
@@ -2800,8 +2471,6 @@ async def get_budget_status(operator_id: str):
     )
 
 
-# ── Fase 3: TrustBoost Score ───────────────────────────────
-
 async def fetch_wallet_score(wallet: str) -> dict | None:
     """Consulta la vista wallet_scores en Supabase para una wallet."""
     async with httpx.AsyncClient() as client:
@@ -2822,19 +2491,7 @@ async def fetch_wallet_score(wallet: str) -> dict | None:
 
 @app.get("/score/{wallet}")
 async def get_trustboost_score(wallet: str):
-    """Retorna el TrustBoost Score de un operador basado en su historial.
-
-    El score (0.0 — 1.0) mide la confiabilidad del agente:
-    - Base: inverso del avg_safety_score (texto más limpio = score más alto)
-    - Penalización: proporción de requests CRITICAL
-    - Bonuses: volumen de historial, diversidad de contextos, antigüedad
-
-    Trust tiers:
-      TRUSTED  ≥ 0.80 — agente maduro, historial limpio
-      VERIFIED ≥ 0.60 — agente activo y confiable
-      ACTIVE   ≥ 0.40 — agente en uso, historial en construcción
-      NEW       < 0.40 — agente nuevo o sin historial suficiente
-    """
+    """Retorna el TrustBoost Score de un operador basado en su historial."""
     if not wallet or wallet == "anonymous":
         return JSONResponse(
             status_code=400,
@@ -2889,8 +2546,6 @@ async def get_trustboost_score(wallet: str):
         }
     )
 
-# ── DEMO: rate limiting autónomo por IP ────────────────────
-
 DEMO_LIMIT_PER_HOUR = 3
 DEMO_MAX_CHARS = 500
 
@@ -2922,21 +2577,12 @@ class DemoRequest(BaseModel):
 
 @app.post("/demo")
 async def demo_sanitize(req: DemoRequest, request: Request):
-    """
-    Public demo endpoint for Hugging Face Space and live demos.
-    - 3 requests per IP per hour — autonomous rate limiting
-    - Max 500 characters per request
-    - Always includes upgrade CTA toward TRIAL and paid
-    - No wallet, no tx_hash required
-    - Anti-abuse: IP hash stored, never raw IP
-    """
+    """Public demo endpoint for Hugging Face Space and live demos."""
     import hashlib
 
-    # Hash the IP — never store raw IP
     raw_ip = request.client.host if request.client else "unknown"
     ip_hash = hashlib.sha256(raw_ip.encode()).hexdigest()[:16]
 
-    # Check rate limit
     count = await get_demo_count(ip_hash)
     remaining = max(0, DEMO_LIMIT_PER_HOUR - count)
 
@@ -2964,7 +2610,6 @@ async def demo_sanitize(req: DemoRequest, request: Request):
             }
         )
 
-    # Truncate to max chars
     text = req.text[:DEMO_MAX_CHARS]
     truncated = len(req.text) > DEMO_MAX_CHARS
 
@@ -2974,17 +2619,14 @@ async def demo_sanitize(req: DemoRequest, request: Request):
             content={"status": "error", "message": "Text cannot be empty"}
         )
 
-    # Call the LLM sanitizer using the real gpt_sanitize function
     try:
         result = await gpt_sanitize(text, context="general")
         entities_list = result.get("entities", [])
         sanitized = result.get("cleaned_text", "[REDACTED]")
 
-        # Server-side enforcement
         sanitized, _, entities_list = enforce_redaction(text, sanitized, entities_list)
         score, category = compute_score(entities_list)
 
-        # Log the demo request
         await increment_demo(ip_hash)
 
         new_remaining = remaining - 1
@@ -3025,8 +2667,9 @@ async def demo_sanitize(req: DemoRequest, request: Request):
             status_code=500,
             content={"status": "error", "message": "Sanitization failed — please try again"}
         )
-SCAN_LIMIT_PER_HOUR = 5   # un poco más generoso que /demo porque no gasta OpenAI en cada tabla vacía
- 
+
+SCAN_LIMIT_PER_HOUR = 5
+
 async def get_scan_count(ip_hash: str) -> int:
     async with httpx.AsyncClient() as client:
         r = await client.get(
@@ -3039,7 +2682,7 @@ async def get_scan_count(ip_hash: str) -> int:
             }
         )
         return len(r.json()) if r.status_code == 200 else 0
- 
+
 async def increment_scan(ip_hash: str):
     async with httpx.AsyncClient() as client:
         await client.post(
@@ -3047,7 +2690,8 @@ async def increment_scan(ip_hash: str):
             headers=SUPABASE_HEADERS,
             json={"ip_hash": ip_hash}
         )
- # ── Badge de confianza embebible — solo para escaneos 100% limpios ──
+
+# ── Badge de confianza embebible — solo para escaneos 100% limpios ──
 # Inspirado en el badge de Snyk para librerías de código abierto: cada
 # embed es simultáneamente prueba de confianza para los visitantes de esa
 # app Y un link de vuelta a TrustBoost.
@@ -3157,20 +2801,20 @@ async def verified_page(scan_id: str):
 </div>
 </body></html>"""
     return HTMLResponse(content=html)
+
+
 class ScanRequest(BaseModel):
     project_url: str
     anon_key: str
-    app_url: str | None = None   # opcional: habilita el chequeo de service_role key filtrado
+    app_url: str | None = None
 from fastapi.responses import HTMLResponse
 
 @app.get("/free-scan", include_in_schema=False)
 async def free_scan_page():
     with open("scan-landing.html", "r", encoding="utf-8") as f:
         return HTMLResponse(content=f.read())
-        
+
 # ── SEO pages (búsqueda de miedo) — una sola ruta para todas ──
-# Agregar una plataforma nueva = agregar una entrada en seo_pages_data.py.
-# Nunca hay que tocar esta ruta ni crear un archivo nuevo por plataforma.
 from seo_pages_data import SEO_PAGES
 
 @app.get("/check/{slug}", include_in_schema=False)
@@ -3191,13 +2835,13 @@ async def seo_check_page(slug: str):
     )
     return HTMLResponse(content=html)
 
-     
+
 @app.post("/scan")
 async def scan_endpoint(req: ScanRequest, request: Request):
     import hashlib
     raw_ip = request.client.host if request.client else "unknown"
     ip_hash = hashlib.sha256(raw_ip.encode()).hexdigest()[:16]
- 
+
     count = await get_scan_count(ip_hash)
     if count >= SCAN_LIMIT_PER_HOUR:
         return JSONResponse(
@@ -3205,11 +2849,11 @@ async def scan_endpoint(req: ScanRequest, request: Request):
             content={"status": "scan_limit_reached",
                       "message": f"Límite de {SCAN_LIMIT_PER_HOUR} escaneos/hora alcanzado. Vuelve en un rato."}
         )
- 
+
     if not req.project_url.startswith("https://") or ".supabase.co" not in req.project_url:
         return JSONResponse(status_code=400, content={"status": "error", "message": "URL de proyecto Supabase inválida"})
- 
-       from supabase_scanner import scan_project   # el módulo de este archivo
+
+    from supabase_scanner import scan_project
     report = await scan_project(req.project_url, req.anon_key, app_url=req.app_url)
     await increment_scan(ip_hash)
 
@@ -3231,6 +2875,9 @@ async def scan_endpoint(req: ScanRequest, request: Request):
         "public_storage_buckets": report.public_storage_buckets,
         "service_role_leak": report.service_role_leak,
         "service_role_leak_source": report.service_role_leak_source,
+        "missing_security_headers": report.missing_security_headers,
+        "has_dmarc": report.has_dmarc,
+        "badge_scan_id": badge_scan_id,
         "details": [
             {
                 "table": f.table_name,
@@ -3241,12 +2888,8 @@ async def scan_endpoint(req: ScanRequest, request: Request):
             for f in report.findings
         ],
     }
-# ── Paid detailed report (AI-generated) ───────────────────
-# TEMPORARY: sin control de pago todavía. Antes de recibir tráfico real,
-# esto debe quedar detrás de una verificación de que el pago en Polar.sh
-# se completó (ver checklist). Por ahora sirve para probar que el
-# generador de reportes funciona de punta a punta.
 
+# ── Paid detailed report (AI-generated) ───────────────────
 @app.post("/report")
 async def report_endpoint(req: ScanRequest, request: Request):
     import hashlib
@@ -3279,11 +2922,8 @@ async def report_endpoint(req: ScanRequest, request: Request):
         "overall_summary": ai_report.get("overall_summary", ""),
         "findings": ai_report.get("findings", []),
     }
-    # ── Detailed Report paid via USDC on Base ─────────────────
-# Verificación leyendo la blockchain directamente (usdc_verify.py),
-# adaptado de la lógica ya probada en Inscrbd. No depende de Coinbase
-# Commerce, Alchemy, ni ningún servicio de terceros.
 
+# ── Detailed Report paid via USDC on Base ─────────────────
 class UsdcReportRequest(BaseModel):
     tx_hash: str
     project_url: str
@@ -3338,12 +2978,8 @@ async def report_usdc_endpoint(req: UsdcReportRequest):
         "overall_summary": ai_report.get("overall_summary", ""),
         "findings": ai_report.get("findings", []),
     }
-# ── Research batch mode — free, admin-only, for your own market research ──
-# Nunca expuesto públicamente: solo responde si el header X-Admin-Secret
-# coincide con tu ADMIN_SECRET. No cobra nada, no usa /report ni Polar ni
-# USDC — corre el mismo escaneo gratuito de siempre, pero automatiza la
-# parte de buscar la URL y anon key en el código público de cada app.
 
+# ── Research batch mode — free, admin-only, for your own market research ──
 ADMIN_SECRET = os.getenv("ADMIN_SECRET", "")
 
 class ResearchBatchRequest(BaseModel):
@@ -3420,10 +3056,9 @@ async def admin_research_stats(request: Request):
         "private_count": private,
         "avg_tables_exposed_per_app": round(total_tables_exposed / total, 2) if total else 0,
         "raw": rows,
-    }    
+    }
+
 # ── Alias endpoints — agent-friendly naming ───────────────
-# Agents infer endpoint names from capability descriptions.
-# These aliases capture that traffic and redirect to core endpoints.
 
 @app.post("/redact")
 async def redact(
@@ -3565,20 +3200,9 @@ async def openapi_json():
     }
 
 
-# ── ANP Agent Description — Agent Network Protocol discovery ──
-# Publishes TrustBoost capabilities in ANP/JSON-LD format.
-# Crawleable by any ANP-aware agent at /.well-known/agent-description.json
-# Enables zero-human-intervention M2M discovery across the agent network.
-
 @app.get("/.well-known/agent-description.json")
 async def anp_agent_description():
-    """ANP Agent Description Document — RFC 8615 well-known URI.
-    
-    Enables autonomous agent discovery via Agent Network Protocol (ANP).
-    Any agent crawling the network finds TrustBoost capabilities,
-    endpoints, payment tiers, trust score, and Proof of Sanitization
-    without human intervention or manual configuration.
-    """
+    """ANP Agent Description Document — RFC 8615 well-known URI."""
     return {
         "@context": [
             "https://www.w3.org/ns/did/v1",
@@ -3715,10 +3339,6 @@ async def anp_agent_description():
         }
     }
 
-
-# ── Agent discoverability endpoints ───────────────────────
-# These endpoints improve AI crawler and agent discovery scores.
-# All are static GET endpoints — zero impact on sanitization logic.
 
 @app.get("/", response_class=None, include_in_schema=False)
 async def homepage():
@@ -4080,10 +3700,6 @@ curl -X POST https://api.trustboost.dev/sanitize/preview \\
 """, media_type="text/markdown")
 
 
-# ── Buyer-agent preflight endpoints ───────────────────────
-# These endpoints satisfy autonomous buyer-agent evaluation protocols
-# before wallet authorization. Zero impact on sanitization logic.
-
 @app.get("/policy", include_in_schema=False)
 async def policy():
     """Policy hash — allows agents to verify terms haven't changed since evaluation."""
@@ -4201,8 +3817,6 @@ async def trustboost_skill_alias(request: Request):
         return JSONResponse(content=resp.json(), status_code=resp.status_code)
 
 
-# ── Discovery aliases — crawlers and agents looking for standard endpoints ──
-
 @app.get("/agents.txt", include_in_schema=False)
 async def agents_txt():
     """Alias — some crawlers look for /agents.txt instead of /llms.txt."""
@@ -4266,8 +3880,6 @@ async def agent_directory_root():
     return RedirectResponse(url="/.well-known/agent-card.json", status_code=301)
 
 
-# ── Visual assets and Glama discovery ─────────────────────────────────────────
-
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon():
     """Favicon redirect — marketplace crawlers look for this."""
@@ -4295,9 +3907,6 @@ async def logo():
     )
 
 
-# ──────────────────────────────────────────────────────────────
-# FASE A (aditivo): pricing — NO toca el core
-# ──────────────────────────────────────────────────────────────
 @app.get("/pricing", include_in_schema=False)
 async def pricing():
     """Machine-readable pricing table for autonomous agent discovery."""
