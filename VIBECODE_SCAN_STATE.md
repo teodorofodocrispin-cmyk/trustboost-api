@@ -522,6 +522,61 @@ no hace falta darle más tráfico del que se ganó él mismo.
 
 ---
 
+## 15. Análisis de lógica de políticas RLS — explorado y pospuesto conscientemente (21 de septiembre de 2026)
+
+A raíz del comentario técnico de Cenk Kurtoğlu (sección 14) y su repo
+`supabase-rls-leak-demo`, se investigó cómo construir la ventaja técnica
+real pendiente desde la sección 11: detectar si una política RLS que
+*existe* realmente restringe algo, no solo si está activada.
+
+**Lo que se confirmó investigando su repositorio:** ninguno de sus
+productos es un escáner automático en vivo — todo es DIY (un kit de $29
+que el usuario corre él mismo) o revisión manual humana ($15-29, 24
+horas de espera). El query que necesita esa profundidad
+(`select ... from pg_policies`) requiere acceso directo a Postgres, algo
+que la anon key no puede dar — por eso ni Supabase ni Cenk lo
+automatizan desde afuera.
+
+**Dos caminos técnicos se diseñaron para resolverlo:**
+
+1. **Personal Access Token de Supabase (por escaneo, nunca guardado)** —
+   la app corre el query por el usuario vía la Management API de
+   Supabase (`POST /v1/projects/{ref}/database/query`), evitando que el
+   usuario toque SQL directamente. Detecta ambos bugs que señaló Cenk
+   (política permisiva sin restricción real, aislamiento roto entre
+   tenants) con precisión, leyendo el SQL real de las políticas.
+2. **Cuentas de prueba (email + password, una o dos)** — en vez de leer
+   el SQL, se inicia sesión como un usuario de prueba (algo que la anon
+   key sí puede hacer) y se compara qué puede leer cada cuenta. Detecta
+   los mismos dos bugs por comportamiento real, sin necesitar que el
+   usuario entienda qué es un token. No detecta el bug de escritura
+   (falta de `WITH CHECK`), que es el menos común de los dos.
+
+**Por qué NO existe una opción sin pedirle nada al usuario:** se
+consideró explícitamente si el producto podría alojar un "token general"
+para evitarle este paso a cada usuario. No es posible — cada proyecto de
+Supabase pertenece a una cuenta distinta, con credenciales distintas;
+un token universal que diera acceso a cualquier proyecto sería
+exactamente el tipo de fuga masiva que este producto existe para
+prevenir. Siempre va a hacer falta que la persona entregue algo propio,
+específico a su proyecto, cada vez.
+
+**La decisión final: posponerlo, no descartarlo.** Ninguna de las dos
+vías (token o cuentas de prueba) se sintió lo bastante libre de fricción
+para la audiencia objetivo (mayoritariamente no-técnica, según la
+sección de investigación de mercado) frente al valor de un solo
+comentario técnico como señal de demanda. Se decidió **no construir
+esto todavía** y esperar evidencia real de que los usuarios lo piden,
+en vez de agregar fricción a un producto que ya funciona basándose en
+una sola señal externa.
+
+**Si se retoma en el futuro, el orden de preferencia queda así:**
+cuentas de prueba primero (menos fricción conceptual, cubre el bug más
+común) — el Personal Access Token queda como opción secundaria si se
+necesita también el chequeo de escritura (`WITH CHECK`).
+
+---
+
 ## Cómo actualizar este documento
 
 Cuando se tome una decisión de negocio o de arquitectura (no un simple
