@@ -24,7 +24,11 @@ Límites éticos/legales:
   endpoint más abajo, tabla scan_requests en vez de demo_requests).
 """
 
+import re
+import json
+import base64
 import httpx
+from urllib.parse import urljoin
 from dataclasses import dataclass, field
 
 # Import real desde tu main.py — funciona sin problema de "import circular"
@@ -37,6 +41,64 @@ from main import gpt_sanitize, compute_score
 MAX_TABLES = 25
 SAMPLE_ROWS = 3
 TIMEOUT_SECONDS = 8.0
+
+JWT_RE = re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}")
+
+
+def decode_jwt_role(token: str) -> str | None:
+    """Decodifica (sin verificar firma) el payload de un JWT de Supabase y
+    devuelve el claim 'role' ('anon' o 'service_role'). No necesitamos
+    verificar la firma — solo estamos leyendo qué TIPO de llave es, algo
+    que cualquiera con el token ya puede ver igual de fácil que nosotros.
+    """
+    try:
+        parts = token.split(".")
+        if len(parts) != 3:
+            return None
+        payload_b64 = parts[1]
+        padding = "=" * (-len(payload_b64) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64 + padding))
+        return payload.get("role")
+    except Exception:
+        return None
+
+
+async def find_service_role_leak_in_frontend(app_url: str) -> str | None:
+    """Busca, en el HTML y los scripts propios de app_url, cualquier JWT
+    cuyo rol sea 'service_role' — la llave maestra que NUNCA debería
+    aparecer en código que corre en el navegador, porque salta todas las
+    políticas de RLS. Devuelve la URL del archivo donde se encontró, o
+    None si no se encontró nada.
+    """
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+    }
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS, headers=headers, follow_redirects=True) as client:
+            resp = await client.get(app_url)
+            html = resp.text
+
+            for token in JWT_RE.findall(html):
+                if decode_jwt_role(token) == "service_role":
+                    return app_url
+
+            script_srcs = re.findall(r'<script[^>]+src=["\']([^"\']+)["\']', html, re.IGNORECASE)
+            same_origin = [
+                urljoin(str(resp.url), s) for s in script_srcs
+                if urljoin(str(resp.url), s).split("/")[2] == str(resp.url).split("/")[2]
+            ]
+            for script_url in same_origin[:25]:
+                try:
+                    script_resp = await client.get(script_url)
+                    for token in JWT_RE.findall(script_resp.text):
+                        if decode_jwt_role(token) == "service_role":
+                            return script_url
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    return None
 
 
 @dataclass
@@ -57,6 +119,8 @@ class ScanReport:
     tables_scanned: int = 0
     findings: list[TableFinding] = field(default_factory=list)
     public_storage_buckets: list[str] = field(default_factory=list)
+    service_role_leak: bool = False
+    service_role_leak_source: str = ""   # "submitted_key" o la URL del script donde apareció
 
     @property
     def overall_severity(self) -> str:
@@ -67,6 +131,8 @@ class ScanReport:
                 worst = f.severity
         if self.public_storage_buckets and order.index("PRIVATE") > order.index(worst):
             worst = "PRIVATE"
+        if self.service_role_leak:
+            worst = "CRITICAL"
         return worst
 
 
@@ -180,9 +246,26 @@ async def check_public_storage(project_url: str, anon_key: str) -> list[str]:
         return []
 
 
-async def scan_project(project_url: str, anon_key: str) -> ScanReport:
-    """Punto de entrada único — esto es lo que tu endpoint /scan llama."""
+async def scan_project(project_url: str, anon_key: str, app_url: str | None = None) -> ScanReport:
+    """Punto de entrada único — esto es lo que tu endpoint /scan llama.
+
+    app_url es OPCIONAL: si el usuario también da la URL de su app (no solo
+    la de Supabase), revisamos su frontend en busca de un service_role key
+    filtrado — el hallazgo más crítico posible, porque esa llave salta
+    TODAS las políticas de RLS.
+    """
     report = ScanReport(project_url=project_url)
+
+    # Chequeo de máxima prioridad: ¿la llave que nos dieron es en realidad
+    # la service_role, no la anon? Si es así, NO seguimos con el escaneo
+    # normal — usar una service_role key para probar tablas siempre las
+    # muestra como "abiertas" (salta RLS), lo cual sería un falso positivo
+    # masivo y engañoso. En vez de eso, devolvemos de una vez el hallazgo
+    # más grave posible y advertimos que rote esa llave.
+    if decode_jwt_role(anon_key) == "service_role":
+        report.service_role_leak = True
+        report.service_role_leak_source = "submitted_key"
+        return report
 
     tables = await discover_tables(project_url, anon_key)
     report.tables_discovered = len(tables)
@@ -194,6 +277,12 @@ async def scan_project(project_url: str, anon_key: str) -> ScanReport:
             report.findings.append(finding)
 
     report.public_storage_buckets = await check_public_storage(project_url, anon_key)
+
+    if app_url:
+        leak_source = await find_service_role_leak_in_frontend(app_url)
+        if leak_source:
+            report.service_role_leak = True
+            report.service_role_leak_source = leak_source
 
     return report
 
