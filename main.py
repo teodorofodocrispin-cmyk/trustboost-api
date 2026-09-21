@@ -2708,6 +2708,8 @@ async def register_clean_scan(app_url: str | None, tables_scanned: int) -> str |
             rows = r.json()
             if rows and isinstance(rows, list):
                 return rows[0].get("scan_id")
+        else:
+            print(f"[register_clean_scan] FALLÓ: status={r.status_code} body={r.text[:300]}")
         return None
 
 
