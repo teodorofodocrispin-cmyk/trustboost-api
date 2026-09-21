@@ -692,6 +692,19 @@ function renderResults(data){
     findingsEl.appendChild(row);
   });
 
+  // Chequeos informativos (headers de seguridad + DMARC) — solo aparecen
+  // si se dio app_url, y no afectan la severidad general del escaneo.
+  const extraNotes = [];
+  (data.missing_security_headers || []).forEach(h => extraNotes.push(`Missing header: ${h}`));
+  if (data.has_dmarc === false) extraNotes.push("No DMARC record found — your domain can be spoofed in phishing emails");
+  if (extraNotes.length > 0) {
+    const extraBox = document.createElement("div");
+    extraBox.style.cssText = "margin-top:16px; padding:14px 16px; border:1px solid var(--border); border-radius:10px; font-size:0.85rem; color:var(--text-dim);";
+    extraBox.innerHTML = `<div style="font-weight:600; margin-bottom:8px; color:var(--text);">Additional checks (informational, don't affect severity above)</div>` +
+      extraNotes.map(n => `<div style="margin:4px 0;">• ${escapeHtml(n)}</div>`).join("");
+    findingsEl.appendChild(extraBox);
+  }
+
   results.classList.add("active");
   results.scrollIntoView({behavior:"smooth", block:"start"});
 }
