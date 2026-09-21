@@ -709,6 +709,23 @@ function renderResults(data){
     findingsEl.appendChild(extraBox);
   }
 
+  // Badge de confianza — solo aparece si el escaneo salió 100% limpio.
+  if (data.badge_scan_id) {
+    const verifyUrl = `https://api.trustboost.dev/verified/${data.badge_scan_id}`;
+    const badgeUrl = `https://api.trustboost.dev/badge/${data.badge_scan_id}.svg`;
+    const snippet = `<a href="${verifyUrl}" target="_blank" rel="noopener"><img src="${badgeUrl}" alt="Scanned by TrustBoost - No issues found"></a>`;
+    const badgeBox = document.createElement("div");
+    badgeBox.style.cssText = "margin-top:16px; padding:18px 16px; border:1px solid #16a34a55; background:#16a34a0d; border-radius:10px;";
+    badgeBox.innerHTML = `
+      <div style="font-weight:600; margin-bottom:8px;">🛡 Your app passed clean — get your badge</div>
+      <p style="font-size:0.85rem; color:var(--text-dim); margin:0 0 12px;">Show visitors your app was checked. Free, and every embed links back to your verification page.</p>
+      <img src="${badgeUrl}" alt="Scanned by TrustBoost - No issues found" style="display:block; margin-bottom:10px;">
+      <pre class="code-block" id="badge-snippet" style="font-size:0.75rem; padding:10px;">${escapeHtml(snippet)}</pre>
+      <button class="copy-btn" onclick="copySql('badge-snippet', this)">Copy embed code</button>
+    `;
+    findingsEl.appendChild(badgeBox);
+  }
+
   results.classList.add("active");
   results.scrollIntoView({behavior:"smooth", block:"start"});
 }
