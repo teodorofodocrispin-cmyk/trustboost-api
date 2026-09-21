@@ -63,6 +63,61 @@ def decode_jwt_role(token: str) -> str | None:
         return None
 
 
+async def check_security_headers(app_url: str) -> list[str]:
+    """Revisa los headers de seguridad HTTP más comunes que faltan en la
+    mayoría de sitios (según UNPWNED: 72% sin CSP, 74% sin rate limiting
+    detectable, 47% sin DMARC). Devuelve la lista de los que faltan.
+    Chequeo puramente informativo — no afecta la severidad general del
+    escaneo, solo se muestra como contexto adicional.
+    """
+    headers_to_check = {
+        "content-security-policy": "Content-Security-Policy (CSP)",
+        "strict-transport-security": "Strict-Transport-Security (HSTS)",
+        "x-frame-options": "X-Frame-Options (protección contra clickjacking)",
+    }
+    missing = []
+    try:
+        client_headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                          "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+        }
+        async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS, headers=client_headers, follow_redirects=True) as client:
+            resp = await client.get(app_url)
+            resp_headers_lower = {k.lower(): v for k, v in resp.headers.items()}
+            for key, label in headers_to_check.items():
+                if key not in resp_headers_lower:
+                    missing.append(label)
+    except Exception:
+        return []  # si no se puede revisar, no se reporta nada (evita falsos positivos)
+    return missing
+
+
+async def check_dmarc(app_url: str) -> bool | None:
+    """Revisa si el dominio tiene un registro DMARC (_dmarc.dominio.com TXT).
+    Sin DMARC, cualquiera puede falsificar correos que parezcan venir de tu
+    dominio (phishing usando tu marca). Usa el DNS-over-HTTPS de Google —
+    sin necesitar ninguna librería nueva de DNS.
+    Devuelve True (tiene DMARC), False (no tiene), o None (no se pudo revisar).
+    """
+    try:
+        from urllib.parse import urlparse
+        domain = urlparse(app_url).netloc.replace("www.", "")
+        if not domain:
+            return None
+        async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
+            resp = await client.get(
+                "https://dns.google/resolve",
+                params={"name": f"_dmarc.{domain}", "type": "TXT"},
+            )
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        answers = data.get("Answer", [])
+        return any("v=DMARC1" in a.get("data", "") for a in answers)
+    except Exception:
+        return None
+
+
 async def find_service_role_leak_in_frontend(app_url: str) -> str | None:
     """Busca, en el HTML y los scripts propios de app_url, cualquier JWT
     cuyo rol sea 'service_role' — la llave maestra que NUNCA debería
@@ -121,6 +176,8 @@ class ScanReport:
     public_storage_buckets: list[str] = field(default_factory=list)
     service_role_leak: bool = False
     service_role_leak_source: str = ""   # "submitted_key" o la URL del script donde apareció
+    missing_security_headers: list[str] = field(default_factory=list)
+    has_dmarc: bool | None = None   # None = no se revisó (no se dio app_url)
 
     @property
     def overall_severity(self) -> str:
@@ -283,6 +340,8 @@ async def scan_project(project_url: str, anon_key: str, app_url: str | None = No
         if leak_source:
             report.service_role_leak = True
             report.service_role_leak_source = leak_source
+        report.missing_security_headers = await check_security_headers(app_url)
+        report.has_dmarc = await check_dmarc(app_url)
 
     return report
 
