@@ -481,6 +481,47 @@ de presencia/ausencia.
 
 ---
 
+## 14. Segunda tanda de páginas SEO indexadas + primera interacción técnica de comunidad (21 de septiembre de 2026)
+
+**5 páginas de SEO más agregadas** a `seo_pages_data.py`, siguiendo el
+mismo patrón genérico (sin incidentes específicos inventados): Cursor,
+Windsurf, Emergent, Databutton, Rork. Total acumulado: **14 páginas**
+(`/check/{slug}`), todas heredando automáticamente el aviso de precio,
+la diferenciación frente a Supabase, y los chequeos de las Fases 1 y 2,
+al venir de la misma plantilla compartida.
+
+**5 de las páginas ya fueron confirmadas como indexadas por Google
+Search Console** — primera señal real de que el flujo de SEO
+programático + Search Console (secciones 6 y 11) está funcionando de
+punta a punta, desde la publicación hasta la indexación real, no solo
+en teoría.
+
+**Primer comentario técnico real en el artículo de dev.to**, de un
+usuario identificado como Cenk Kurtoğlu (usuario `cekuu35`) — vale la
+pena registrar quién es, porque no es un lector cualquiera: es un
+**competidor directo** que vende un "Supabase RLS Audit Kit" ($29) y
+mantiene un repo gratuito (`github.com/cekuu35/supabase-rls-leak-demo`)
+con contenido técnico muy activo en dev.to y en discusiones de GitHub de
+Supabase y Next.js — la misma estrategia de distribución que estamos
+usando aquí, pero enfocada específicamente en bugs de lógica de RLS.
+
+Su comentario señaló, con precisión técnica correcta, los dos casos que
+un escáner de caja negra (como el nuestro) **no puede ver estructuralmente**:
+una política que existe pero no restringe nada real (ej. `to authenticated
+using (true)`), y un join entre tenants sin aislar donde el filtro vive en
+el cliente, no en la base de datos. Ambos casos pasan un chequeo de
+endpoint limpio porque la anon key sí puede leer los datos — es
+exactamente la misma limitación ya documentada en la sección 11 como la
+ventaja técnica real pendiente de construir.
+
+Se respondió el comentario reconociendo el punto sin exagerar gratitud,
+siendo explícito sobre el límite actual del escaneo de caja negra (mejor
+decirlo que ocultarlo), y sin promocionar su kit pago dentro de la
+respuesta — la información pública que compartió ya tiene valor propio,
+no hace falta darle más tráfico del que se ganó él mismo.
+
+---
+
 ## Cómo actualizar este documento
 
 Cuando se tome una decisión de negocio o de arquitectura (no un simple
