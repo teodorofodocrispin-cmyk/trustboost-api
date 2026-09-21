@@ -622,6 +622,65 @@ explícita antes de construirlo. Sigue pendiente de decisión.
 
 ---
 
+## 17. Badge de confianza embebible — construido, con un bug real, y verificado en producción (21 de septiembre de 2026)
+
+Construido a partir de la investigación de la sección 16 (Snyk, trust badges,
+12-42% de aumento en conversión medido en estudios independientes).
+
+**Arquitectura implementada:**
+
+1. **Tabla `badge_scans` en Supabase** — un registro por escaneo 100% limpio
+   (`scan_id` UUID, `app_url` opcional, `tables_scanned`, `created_at`). Solo
+   se crea una fila cuando `overall_severity == "OK"` Y no hay service_role
+   leak Y no hay buckets públicos — nunca se emite un badge para algo que no
+   esté genuinamente limpio.
+2. **`GET /badge/{scan_id}.svg`** — genera el badge como SVG a mano (mismo
+   patrón visual que usa Snyk), sin depender de ninguna librería ni servicio
+   externo. Cachea 1 hora.
+3. **`GET /verified/{scan_id}`** — página pública de verificación, con la
+   fecha del escaneo, cuántas tablas se revisaron, y un aviso honesto de que
+   es un escaneo puntual, no una garantía permanente ni una certificación.
+4. **Frontend**: cuando `/scan` devuelve `badge_scan_id`, aparece una caja
+   verde con el badge y un botón "Copy embed code" que da el snippet
+   completo (`<a href="/verified/...">` envolviendo el `<img src="/badge/...">`)
+   — el link es lo que le da valor SEO real a cada embed, no solo la imagen.
+
+**El bug real que se encontró y corrigió:** el primer intento de registrar
+un escaneo limpio falló con error 401 / código Postgres `42501`: *"new row
+violates row-level security policy for table badge_scans"*. La tabla se
+había creado con RLS activado por defecto (típico al usar el editor visual
+de Supabase en vez del SQL Editor) pero sin ninguna política que permitiera
+insertar filas — bloqueando incluso al propio backend. Se corrigió con:
+
+```sql
+alter table badge_scans disable row level security;
+```
+
+Justificación de por qué desactivar RLS aquí es seguro: esta tabla nunca se
+expone a un cliente externo directamente — solo el propio backend la lee y
+escribe, con la misma llave que ya usan `audit_log` y `scan_requests`.
+
+**Diagnóstico usado para encontrar el bug:** se agregó un log temporal en
+`register_clean_scan()` (`print(f"[register_clean_scan] FALLÓ: status=...
+body=...")`) que expuso el error exacto de Supabase en los logs de Render.
+Esa línea sigue en el código — no hace daño dejarla, solo genera una línea
+de log en el caso (ahora raro) de que el registro vuelva a fallar.
+
+**Verificado en producción, de punta a punta:** escaneo real y limpio del
+propio proyecto de TrustBoost (40 tablas revisadas, 0 hallazgos) generó
+correctamente `badge_scan_id`, la caja verde apareció en el frontend, y
+`https://api.trustboost.dev/verified/{scan_id}` carga la página real con
+el sello "✓ Verified Secure", la fecha, el conteo de tablas, y el link de
+vuelta a `/free-scan`.
+
+**Lección reutilizable para futuras tablas nuevas:** al crear una tabla
+nueva en Supabase para que el propio backend la use (nunca expuesta al
+público), verificar de entrada si quedó con RLS activado sin política —
+mismo patrón de error que ya causó este bug, y podría repetirse en la
+próxima tabla que se agregue sin este chequeo explícito.
+
+---
+
 ## Cómo actualizar este documento
 
 Cuando se tome una decisión de negocio o de arquitectura (no un simple
