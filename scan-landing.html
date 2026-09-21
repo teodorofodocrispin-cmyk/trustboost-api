@@ -330,6 +330,7 @@
     footer .wrap{ flex-direction:column; align-items:flex-start; }
   }
 </style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 </head>
 <body>
 
@@ -369,6 +370,11 @@
         <label for="anon_key">Anon key (public)</label>
         <input type="password" id="anon_key" placeholder="eyJhbGciOi..." autocomplete="off">
         <small>Project Settings → API → "anon public" in your Supabase dashboard. Never paste your service_role key.</small>
+      </div>
+      <div class="field">
+        <label for="app_url">Your app's URL (optional)</label>
+        <input type="text" id="app_url" placeholder="https://yourapp.com" autocomplete="off">
+        <small>Adds one extra check: whether your service_role key (the master key that bypasses all security rules) is accidentally exposed in your app's own code.</small>
       </div>
 
       <div class="consent-row">
@@ -567,6 +573,7 @@ function setStep(id, state){
 async function runScan(){
   const projectUrl = document.getElementById("project_url").value.trim();
   const anonKey = document.getElementById("anon_key").value.trim();
+  const appUrl = document.getElementById("app_url").value.trim();
   const btn = document.getElementById("scan-btn");
   const errorMsg = document.getElementById("error-msg");
   const sequence = document.getElementById("sequence");
@@ -598,7 +605,7 @@ async function runScan(){
     const resp = await fetch(API_URL, {
       method: "POST",
       headers: {"Content-Type":"application/json"},
-      body: JSON.stringify({project_url: projectUrl, anon_key: anonKey})
+      body: JSON.stringify({project_url: projectUrl, anon_key: anonKey, app_url: appUrl || null})
     });
     const data = await resp.json();
 
@@ -633,10 +640,17 @@ function renderResults(data){
   document.getElementById("stat-discovered").textContent = data.tables_discovered ?? 0;
   document.getElementById("stat-leaks").textContent = data.tables_with_leak ?? 0;
 
-  const hasLeak = (data.tables_with_leak ?? 0) > 0 || (data.public_storage_buckets?.length ?? 0) > 0;
+  const hasLeak = (data.tables_with_leak ?? 0) > 0 || (data.public_storage_buckets?.length ?? 0) > 0 || data.service_role_leak;
 
   verdict.classList.remove("ok","leak");
-  if(hasLeak){
+  if(data.service_role_leak){
+    verdict.classList.add("leak");
+    verdictLabel.textContent = "SEVERITY: CRITICAL";
+    verdictTitle.textContent = data.service_role_leak_source === "submitted_key"
+      ? "That's your service_role key, not your anon key"
+      : "Your service_role key is exposed in your app's own code";
+    ctaRow.style.display = "grid";
+  }else if(hasLeak){
     verdict.classList.add("leak");
     verdictLabel.textContent = "SEVERITY: " + (data.overall_severity || "PRIVATE");
     verdictTitle.textContent = "We found data accessible without authentication";
@@ -649,6 +663,17 @@ function renderResults(data){
   }
 
   findingsEl.innerHTML = "";
+  if(data.service_role_leak){
+    const row = document.createElement("div");
+    row.className = "finding-row";
+    const where = data.service_role_leak_source === "submitted_key" ? "the key you pasted" : "your app's public code";
+    row.innerHTML = `
+      <div class="finding-table mono">⚠ service_role key</div>
+      <div class="finding-rows">found in ${escapeHtml(where)} — bypasses ALL security rules</div>
+      <div class="pill critical">CRITICAL</div>
+    `;
+    findingsEl.appendChild(row);
+  }
   (data.details || []).forEach(f=>{
     const row = document.createElement("div");
     row.className = "finding-row";
@@ -685,6 +710,7 @@ async function payWithUSDC(){
   const usdcMsg = document.getElementById("usdc-msg");
   const projectUrl = document.getElementById("project_url").value.trim();
   const anonKey = document.getElementById("anon_key").value.trim();
+  const appUrl = document.getElementById("app_url").value.trim();
 
   usdcMsg.style.display = "none";
 
@@ -728,7 +754,7 @@ async function payWithUSDC(){
     });
 
     usdcBtn.textContent = "Confirming on Base...";
-    await unlockReportWithUsdc(txHash, projectUrl, anonKey);
+    await unlockReportWithUsdc(txHash, projectUrl, anonKey, appUrl);
 
   }catch(err){
     usdcMsg.textContent = err && err.message ? err.message : "Payment was cancelled or failed.";
@@ -738,7 +764,7 @@ async function payWithUSDC(){
   }
 }
 
-async function unlockReportWithUsdc(txHash, projectUrl, anonKey){
+async function unlockReportWithUsdc(txHash, projectUrl, anonKey, appUrl){
   const usdcBtn = document.getElementById("usdc-btn");
   const usdcMsg = document.getElementById("usdc-msg");
   const maxAttempts = 10;
@@ -748,7 +774,7 @@ async function unlockReportWithUsdc(txHash, projectUrl, anonKey){
       const resp = await fetch(REPORT_USDC_URL, {
         method: "POST",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({tx_hash: txHash, project_url: projectUrl, anon_key: anonKey})
+        body: JSON.stringify({tx_hash: txHash, project_url: projectUrl, anon_key: anonKey, app_url: appUrl || null})
       });
       const data = await resp.json();
 
@@ -793,13 +819,16 @@ function renderPaidReport(data, txHash){
   const badgeClass = data.overall_severity === "CRITICAL" ? "critical" : "private";
   const generatedAt = new Date().toLocaleString("en-US", {dateStyle:"medium", timeStyle:"short"});
 
+  const reportId = "TB-" + new Date().getFullYear() + "-" + Math.floor(1000 + Math.random() * 9000);
+
   let findingsHtml = "";
   (data.findings || []).forEach((f, i)=>{
     const blockId = "sql-block-" + i;
+    const findingId = reportId + "-" + String(i + 1).padStart(2, "0");
     findingsHtml += `
       <div class="finding-card">
         <div class="finding-head">
-          <span class="fname">${escapeHtml(f.table)}</span>
+          <span class="fname">${escapeHtml(f.table)} <span style="color:var(--text-dim); font-weight:400; font-size:0.8em;">(${findingId})</span></span>
           <span class="report-badge ${badgeClass}">${escapeHtml(f.severity || data.overall_severity || "")}</span>
         </div>
         <div class="finding-explain">${escapeHtml(f.plain_explanation)}</div>
@@ -807,6 +836,11 @@ function renderPaidReport(data, txHash){
           <span class="label">BUSINESS IMPACT</span>
           ${escapeHtml(f.business_impact)}
         </div>
+        ${f.compliance_note ? `
+        <div class="impact-box" style="border-left-color:#8b5cf6;">
+          <span class="label" style="color:#8b5cf6;">COMPLIANCE</span>
+          ${escapeHtml(f.compliance_note)}
+        </div>` : ""}
         <div class="code-wrap">
           <div class="code-label">Fix — run this in your Supabase SQL editor</div>
           <pre class="code-block" id="${blockId}">${escapeHtml(f.sql_fix)}</pre>
@@ -821,11 +855,11 @@ function renderPaidReport(data, txHash){
     : "Paid via card, processed by Polar";
 
   container.innerHTML = `
-    <div class="report-doc">
+    <div class="report-doc" id="report-doc-content">
       <div class="report-header">
         <div>
           <h2>Detailed Security Report</h2>
-          <div class="report-meta">${escapeHtml(data.project_url)}<br>Generated ${generatedAt}</div>
+          <div class="report-meta">Report ${reportId}<br>${escapeHtml(data.project_url)}<br>Generated ${generatedAt}</div>
         </div>
         <span class="report-badge ${badgeClass}">SEVERITY: ${escapeHtml(data.overall_severity || "")}</span>
       </div>
@@ -836,8 +870,20 @@ function renderPaidReport(data, txHash){
         <span>${txLine}</span>
       </div>
     </div>
+    <button class="btn" style="margin-top:16px;" onclick="downloadReportPdf('${reportId}')">Download PDF</button>
   `;
   container.scrollIntoView({behavior:"smooth", block:"start"});
+}
+
+function downloadReportPdf(reportId){
+  const el = document.getElementById("report-doc-content");
+  html2pdf().set({
+    margin: 10,
+    filename: reportId + "-trustboost-report.pdf",
+    image: {type: "jpeg", quality: 0.98},
+    html2canvas: {scale: 2, backgroundColor: "#0d0d12"},
+    jsPDF: {unit: "mm", format: "a4", orientation: "portrait"}
+  }).from(el).save();
 }
 
 function copySql(blockId, btn){
