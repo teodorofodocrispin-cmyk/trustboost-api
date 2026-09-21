@@ -5,7 +5,7 @@ import hashlib
 import base58
 from typing import Optional, List, Literal
 import httpx
-from fastapi import FastAPI, Request, Header
+from fastapi import FastAPI, Request, Header, HTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
@@ -3051,6 +3051,7 @@ async def increment_scan(ip_hash: str):
 class ScanRequest(BaseModel):
     project_url: str
     anon_key: str
+    app_url: str | None = None   # opcional: habilita el chequeo de service_role key filtrado
 from fastapi.responses import HTMLResponse
 
 @app.get("/free-scan", include_in_schema=False)
@@ -3100,7 +3101,7 @@ async def scan_endpoint(req: ScanRequest, request: Request):
         return JSONResponse(status_code=400, content={"status": "error", "message": "URL de proyecto Supabase inválida"})
  
     from supabase_scanner import scan_project   # el módulo de este archivo
-    report = await scan_project(req.project_url, req.anon_key)
+    report = await scan_project(req.project_url, req.anon_key, app_url=req.app_url)
     await increment_scan(ip_hash)
  
     return {
@@ -3110,6 +3111,8 @@ async def scan_endpoint(req: ScanRequest, request: Request):
         "tables_discovered": report.tables_discovered,
         "tables_with_leak": len(report.findings),
         "public_storage_buckets": report.public_storage_buckets,
+        "service_role_leak": report.service_role_leak,
+        "service_role_leak_source": report.service_role_leak_source,
         "details": [
             {
                 "table": f.table_name,
@@ -3146,7 +3149,7 @@ async def report_endpoint(req: ScanRequest, request: Request):
     from supabase_scanner import scan_project
     from report_generator import generate_report
 
-    report = await scan_project(req.project_url, req.anon_key)
+    report = await scan_project(req.project_url, req.anon_key, app_url=req.app_url)
     await increment_scan(ip_hash)
 
     ai_report = await generate_report(report, openai_client)
@@ -3167,6 +3170,7 @@ class UsdcReportRequest(BaseModel):
     tx_hash: str
     project_url: str
     anon_key: str
+    app_url: str | None = None
 
 REPORT_PRICE_USDC = "49"
 
@@ -3206,7 +3210,7 @@ async def report_usdc_endpoint(req: UsdcReportRequest):
     from supabase_scanner import scan_project
     from report_generator import generate_report
 
-    report = await scan_project(req.project_url, req.anon_key)
+    report = await scan_project(req.project_url, req.anon_key, app_url=req.app_url)
     ai_report = await generate_report(report, openai_client)
 
     return {
