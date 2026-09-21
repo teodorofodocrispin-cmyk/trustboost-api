@@ -407,6 +407,80 @@ sí sería una ventaja técnica real, no solo de audiencia.
 
 ---
 
+## 12. Fase 1 de diferenciación técnica — construida y verificada en producción (20 de septiembre de 2026)
+
+Implementado y confirmado funcionando en vivo, en este orden:
+
+1. **Detección de service_role key filtrado** (`supabase_scanner.py`):
+   decodifica el JWT (sin verificar firma, solo lee el claim `role`) tanto
+   de la key que el usuario pega como, opcionalmente, del código público de
+   su app si da su `app_url`. Si detecta `service_role` en la key pegada,
+   **no continúa con el escaneo normal** — evita el falso positivo masivo
+   que se daría al probar tablas con una key que salta todo RLS. Probado
+   en producción pegando una key de prueba: veredicto CRÍTICO correcto,
+   cero tablas escaneadas, tal como se diseñó.
+2. **Mapeo de cumplimiento** (`report_generator.py`): cada hallazgo del
+   reporte pagado ahora incluye una nota de qué marco de cumplimiento
+   (GDPR Art. 32, SOC 2 CC6.1, ISO 27001 A.9) aplicaría. El hallazgo de
+   service_role usa texto fijo (no gasta llamada a OpenAI, ya que es
+   siempre el mismo problema).
+3. **Reporte en PDF descargable** (`scan-landing.html` / `seo-template.html`):
+   botón "Download PDF" vía `html2pdf.js` (CDN), con ID único de reporte
+   (`TB-2026-XXXX`) y diseño en el tema oscuro de la marca.
+
+**Detalle técnico importante para el futuro:** `main.py` tenía un bug
+preexistente (no introducido en esta sesión) — usaba `HTTPException` en
+dos lugares (`/check/{slug}` y `/admin/scan-batch`) sin haberlo importado
+nunca de `fastapi`. Se corrigió al mismo tiempo que se conectó `app_url`
+a los tres endpoints de escaneo (`/scan`, `/report`, `/report-usdc`).
+
+**Pendiente de la Fase 2** (documentado en la sección 5 del research
+original): lógica real de políticas RLS (no solo si existen), buckets de
+Storage sin política, Edge Functions sin verificar JWT, y headers de
+seguridad generales (CSP, rate limiting, DMARC).
+
+---
+
+## 13. Fase 2 de diferenciación técnica (parcial) — headers de seguridad y DMARC (20 de septiembre de 2026)
+
+Segunda tanda de chequeos, agregados a `supabase_scanner.py` y conectados
+a `main.py` + al frontend (`scan-landing.html` / `seo-template.html`).
+Solo corren si el usuario dio su `app_url` opcional (igual que el chequeo
+de service_role del frontend en la Fase 1).
+
+1. **Headers de seguridad faltantes** (`check_security_headers`): revisa
+   si la respuesta HTTP de `app_url` trae `Content-Security-Policy`,
+   `Strict-Transport-Security` y `X-Frame-Options`. Sin credenciales, solo
+   lee headers públicos. Probado en vivo contra github.com: 0 headers
+   faltantes (correcto, GitHub sí los tiene).
+2. **DMARC** (`check_dmarc`): revisa si el dominio tiene un registro TXT
+   en `_dmarc.<dominio>` usando el DNS-over-HTTPS de Google
+   (`https://dns.google/resolve`) — sin agregar ninguna librería nueva de
+   DNS al proyecto. Sin DMARC, cualquiera puede enviar correos de phishing
+   que parezcan venir del dominio del usuario.
+
+**Cómo se presentan:** ambos aparecen en el resultado del escaneo gratuito
+como una caja separada, marcada explícitamente como "informational, don't
+affect severity above" — a propósito NO suman a la severidad
+CRÍTICA/PRIVADA del hallazgo principal, para no diluir la señal del
+problema real (RLS/datos expuestos) con ruido de menor prioridad.
+
+**Limitación de verificación:** el chequeo de DMARC no se pudo probar en
+vivo durante esta sesión — el entorno de desarrollo usado no tiene acceso
+de red a `dns.google`. Es una restricción del entorno de pruebas, no del
+código; debe confirmarse una vez desplegado en Render (que sí tiene
+acceso completo a internet).
+
+**Lo que queda pendiente de la Fase 2 original** (no se abordó en esta
+tanda): lógica real de políticas RLS (probar si una política mal escrita
+deja pasar datos pese a estar "activada"), buckets de Storage con
+políticas mal configuradas más allá de "público sí/no", y Edge Functions
+sin verificación de JWT al inicio. Vale la pena abordarlo en una sesión
+dedicada, ya que requiere lógica de prueba más elaborada que un chequeo
+de presencia/ausencia.
+
+---
+
 ## Cómo actualizar este documento
 
 Cuando se tome una decisión de negocio o de arquitectura (no un simple
