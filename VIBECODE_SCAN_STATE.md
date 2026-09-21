@@ -577,6 +577,51 @@ necesita también el chequeo de escritura (`WITH CHECK`).
 
 ---
 
+## 16. Meta de 20 páginas de SEO alcanzada (21 de septiembre de 2026)
+
+Se agregaron las últimas 6 plataformas (Glide, Retool, Softr, FlutterFlow,
+Bubble, Adalo) a `seo_pages_data.py`, completando las **20 páginas** de
+`/check/{slug}` que se habían propuesto como meta. Las 20 fueron
+confirmadas indexadas en Google Search Console el mismo día — sin
+retraso notable frente a las tandas anteriores.
+
+Lista completa de slugs activos: `lovable`, `bolt`, `base44`, `replit`,
+`v0`, `create`, `tempo`, `softgen`, `same`, `cursor`, `windsurf`,
+`emergent`, `databutton`, `rork`, `glide`, `retool`, `softr`,
+`flutterflow`, `bubble`, `adalo`.
+
+**Nota de investigación relevante (misma sesión):** se investigó la
+posibilidad de un programa formal de partners de seguridad con Lovable,
+Bolt.new u otras plataformas — no se encontró ninguno activo. No es una
+vía cerrada para siempre, pero no hay una puerta abierta hoy; no vale
+la pena invertir tiempo ahí por ahora.
+
+**Idea de crecimiento identificada, aún no construida — el badge
+embebible de confianza:** investigación de mercado confirmó que los
+"trust badges" (sellos de seguridad visibles) suben la conversión de
+sitios que los muestran entre 12% y 42% (Baymard Institute, Blue
+Fountain Media, ConversionXL). Snyk construyó exactamente este modelo
+para librerías de código abierto — un badge embebible con calificación
+A-F y link "dofollow" de vuelta a Snyk — y llegó a $300M ARR usándolo
+como motor de distribución, además de la mejora de conversión que le da
+a quien lo embebe.
+
+La idea para TrustBoost: cualquiera que escanee su app y salga limpio
+podría recibir un badge "Scanned by TrustBoost — No issues found" para
+poner en su propio landing page, con link a una página pública de
+verificación (`trustboost.dev/verified/{scan_id}`). Cada embed sería
+simultáneamente (1) más confianza para los visitantes de esa app, (2) un
+link de vuelta a TrustBoost, y (3) exposición de marca en cada app de
+vibe coding que lo use — el mismo ciclo que uso Snyk.
+
+**Por qué no se construyó todavía:** requiere una tabla nueva en
+Supabase para persistir cada escaneo con un ID único, una página pública
+de verificación, y un generador de badge en SVG — más trabajo de
+ingeniería que las mejoras anteriores, y se decidió esperar confirmación
+explícita antes de construirlo. Sigue pendiente de decisión.
+
+---
+
 ## Cómo actualizar este documento
 
 Cuando se tome una decisión de negocio o de arquitectura (no un simple
