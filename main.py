@@ -3047,7 +3047,116 @@ async def increment_scan(ip_hash: str):
             headers=SUPABASE_HEADERS,
             json={"ip_hash": ip_hash}
         )
- 
+ # ── Badge de confianza embebible — solo para escaneos 100% limpios ──
+# Inspirado en el badge de Snyk para librerías de código abierto: cada
+# embed es simultáneamente prueba de confianza para los visitantes de esa
+# app Y un link de vuelta a TrustBoost.
+
+async def register_clean_scan(app_url: str | None, tables_scanned: int) -> str | None:
+    """Registra un escaneo limpio y devuelve su scan_id (UUID), o None si falla."""
+    async with httpx.AsyncClient() as client:
+        r = await client.post(
+            f"{SUPABASE_URL}/rest/v1/badge_scans",
+            headers={**SUPABASE_HEADERS, "Prefer": "return=representation"},
+            json={"app_url": app_url, "tables_scanned": tables_scanned}
+        )
+        if r.status_code in (200, 201):
+            rows = r.json()
+            if rows and isinstance(rows, list):
+                return rows[0].get("scan_id")
+        return None
+
+
+async def get_badge_scan(scan_id: str) -> dict | None:
+    async with httpx.AsyncClient() as client:
+        r = await client.get(
+            f"{SUPABASE_URL}/rest/v1/badge_scans",
+            headers=SUPABASE_HEADERS,
+            params={"scan_id": f"eq.{scan_id}", "select": "*", "limit": "1"}
+        )
+        if r.status_code == 200:
+            rows = r.json()
+            return rows[0] if rows else None
+        return None
+
+
+BADGE_SVG_TEMPLATE = """<svg xmlns="http://www.w3.org/2000/svg" width="176" height="20" role="img" aria-label="TrustBoost: Verified Secure">
+  <linearGradient id="s" x2="0" y2="100%">
+    <stop offset="0" stop-color="#bbb" stop-opacity=".1"/>
+    <stop offset="1" stop-opacity=".1"/>
+  </linearGradient>
+  <clipPath id="r"><rect width="176" height="20" rx="3" fill="#fff"/></clipPath>
+  <g clip-path="url(#r)">
+    <rect width="83" height="20" fill="#1a1a2e"/>
+    <rect x="83" width="93" height="20" fill="#16a34a"/>
+    <rect width="176" height="20" fill="url(#s)"/>
+  </g>
+  <g fill="#fff" text-anchor="middle" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" font-size="11">
+    <text x="41.5" y="14">TrustBoost</text>
+    <text x="129.5" y="14">Verified Secure</text>
+  </g>
+</svg>"""
+
+BADGE_SVG_ISSUES_TEMPLATE = """<svg xmlns="http://www.w3.org/2000/svg" width="176" height="20" role="img" aria-label="TrustBoost: Not Verified">
+  <clipPath id="r"><rect width="176" height="20" rx="3" fill="#fff"/></clipPath>
+  <g clip-path="url(#r)">
+    <rect width="83" height="20" fill="#1a1a2e"/>
+    <rect x="83" width="93" height="20" fill="#525252"/>
+  </g>
+  <g fill="#fff" text-anchor="middle" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" font-size="11">
+    <text x="41.5" y="14">TrustBoost</text>
+    <text x="129.5" y="14">Scan Expired</text>
+  </g>
+</svg>"""
+
+
+@app.get("/badge/{scan_id}.svg", include_in_schema=False)
+async def badge_svg(scan_id: str):
+    scan = await get_badge_scan(scan_id)
+    svg = BADGE_SVG_TEMPLATE if scan else BADGE_SVG_ISSUES_TEMPLATE
+    return Response(
+        content=svg,
+        media_type="image/svg+xml",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
+@app.get("/verified/{scan_id}", include_in_schema=False)
+async def verified_page(scan_id: str):
+    scan = await get_badge_scan(scan_id)
+    if not scan:
+        html = """<!DOCTYPE html><html><head><title>Scan not found — TrustBoost</title></head>
+<body style="font-family:sans-serif; background:#0d0d12; color:#e5e5e5; text-align:center; padding:80px 20px;">
+<h1>This verification link doesn't exist</h1>
+<p><a href="https://api.trustboost.dev/free-scan" style="color:#16a34a;">Run your own free scan →</a></p>
+</body></html>"""
+        return HTMLResponse(content=html, status_code=404)
+
+    app_label = scan.get("app_url") or "This Supabase project"
+    created = scan.get("created_at", "")[:10]
+    tables = scan.get("tables_scanned", 0)
+
+    html = f"""<!DOCTYPE html><html><head>
+<meta charset="UTF-8"><title>Verified by TrustBoost</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background:#0d0d12; color:#e5e5e5; margin:0; padding:60px 20px; text-align:center; }}
+  .card {{ max-width: 480px; margin: 0 auto; border:1px solid #2a2a35; border-radius:14px; padding:40px 30px; background:#14141c; }}
+  .badge {{ font-size:0.8rem; letter-spacing:0.05em; color:#16a34a; font-weight:600; text-transform:uppercase; }}
+  h1 {{ font-size:1.4rem; margin:14px 0 8px; }}
+  p {{ color:#a0a0ab; font-size:0.92rem; line-height:1.5; }}
+  a.cta {{ display:inline-block; margin-top:24px; padding:12px 24px; background:#16a34a; color:#fff; text-decoration:none; border-radius:8px; font-weight:600; }}
+</style>
+</head><body>
+<div class="card">
+  <div class="badge">✓ Verified Secure</div>
+  <h1>{app_label}</h1>
+  <p>Scanned by TrustBoost on {created}. {tables} common tables were checked for public read access with no authentication — none were found exposed at scan time.</p>
+  <p style="font-size:0.8rem; color:#6b6b75;">This reflects a point-in-time scan, not a certified audit or ongoing guarantee.</p>
+  <a class="cta" href="https://api.trustboost.dev/free-scan">Scan your own app free →</a>
+</div>
+</body></html>"""
+    return HTMLResponse(content=html)
 class ScanRequest(BaseModel):
     project_url: str
     anon_key: str
@@ -3100,10 +3209,19 @@ async def scan_endpoint(req: ScanRequest, request: Request):
     if not req.project_url.startswith("https://") or ".supabase.co" not in req.project_url:
         return JSONResponse(status_code=400, content={"status": "error", "message": "URL de proyecto Supabase inválida"})
  
-    from supabase_scanner import scan_project   # el módulo de este archivo
+       from supabase_scanner import scan_project   # el módulo de este archivo
     report = await scan_project(req.project_url, req.anon_key, app_url=req.app_url)
     await increment_scan(ip_hash)
- 
+
+    is_fully_clean = (
+        report.overall_severity == "OK"
+        and not report.service_role_leak
+        and not report.public_storage_buckets
+    )
+    badge_scan_id = None
+    if is_fully_clean:
+        badge_scan_id = await register_clean_scan(req.app_url, report.tables_discovered)
+
     return {
         "status": "success",
         "project_url": report.project_url,
