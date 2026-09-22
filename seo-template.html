@@ -844,17 +844,10 @@ function renderPaidReport(data, txHash){
   const badgeClass = data.overall_severity === "CRITICAL" ? "critical" : "private";
   const generatedAt = new Date().toLocaleString("en-US", {dateStyle:"medium", timeStyle:"short"});
 
-  const reportId = "TB-" + new Date().getFullYear() + "-" + Math.floor(1000 + Math.random() * 9000);
-
-  // Guardado para que downloadReportPdf arme la versión imprimible
-  // (fondo blanco, azul/dorado) sin depender de ningún color del tema
-  // oscuro del sitio.
-  window.__tbLastReport = { data, reportId, txHash, generatedAt };
-
   let findingsHtml = "";
   (data.findings || []).forEach((f, i)=>{
     const blockId = "sql-block-" + i;
-    const findingId = reportId + "-" + String(i + 1).padStart(2, "0");
+    const findingId = (data.report_id || "report") + "-" + String(i + 1).padStart(2, "0");
     findingsHtml += `
       <div class="finding-card">
         <div class="finding-head">
@@ -884,12 +877,31 @@ function renderPaidReport(data, txHash){
     ? `Paid via USDC on Base — <a href="https://basescan.org/tx/${txHash}" target="_blank" rel="noopener">view transaction</a>`
     : "Paid via card, processed by Polar";
 
+  // El botón de PDF ahora es un link directo a un archivo real generado
+  // en el servidor (report_pdf.py) — descarga inmediata, sin diálogos,
+  // sin depender del navegador para "fotografiar" nada.
+  const pdfButton = data.report_id
+    ? `<a class="btn" style="margin-top:16px; display:inline-block; text-decoration:none;" href="/report/${data.report_id}/pdf">Download PDF</a>`
+    : "";
+
+  // Link permanente — si la persona cierra esta pestaña, este es el
+  // único lugar donde puede volver a ver o descargar lo que pagó.
+  const permalinkBox = data.report_url ? `
+    <div style="margin-top:16px; padding:14px 16px; border:1px solid #16a34a55; background:#16a34a0d; border-radius:10px; font-size:0.85rem;">
+      <div style="font-weight:600; margin-bottom:6px;">📌 Save this link — it's the only way to access your report again</div>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <input readonly value="${data.report_url}" id="report-permalink" style="flex:1; background:var(--bg-2,#0d0d12); border:1px solid var(--border); border-radius:6px; padding:8px 10px; color:var(--text); font-size:0.8rem;">
+        <button class="copy-btn" onclick="copyPermalink()">Copy link</button>
+      </div>
+    </div>
+  ` : "";
+
   container.innerHTML = `
     <div class="report-doc" id="report-doc-content">
       <div class="report-header">
         <div>
           <h2>Detailed Security Report</h2>
-          <div class="report-meta">Report ${reportId}<br>${escapeHtml(data.project_url)}<br>Generated ${generatedAt}</div>
+          <div class="report-meta">Report ${escapeHtml(data.report_id || "")}<br>${escapeHtml(data.project_url)}<br>Generated ${generatedAt}</div>
         </div>
         <span class="report-badge ${badgeClass}">SEVERITY: ${escapeHtml(data.overall_severity || "")}</span>
       </div>
@@ -900,144 +912,16 @@ function renderPaidReport(data, txHash){
         <span>${txLine}</span>
       </div>
     </div>
-    <button class="btn" style="margin-top:16px;" onclick="downloadReportPdf('${reportId}')">Download PDF (opens print dialog — choose "Save as PDF")</button>
+    ${pdfButton}
+    ${permalinkBox}
   `;
   container.scrollIntoView({behavior:"smooth", block:"start"});
 }
 
-// ── Plantilla del PDF — fondo blanco, azul y dorado corporativos ──
-// Completamente independiente del tema oscuro del sitio: todos los
-// colores son literales (no variables CSS), así que html2canvas los
-// captura sin ambigüedad, sin importar qué tema tenga el navegador.
-const TB_NAVY = "#0f2a4a";
-const TB_GOLD = "#a8842c";
-const TB_GOLD_BG = "#fdf8ec";
-const TB_TEXT = "#1f2937";
-const TB_TEXT_DIM = "#64748b";
-const TB_BORDER = "#e2e8f0";
-const TB_CRITICAL = "#9a3412";
-const TB_CRITICAL_BG = "#fef2f2";
-
-function tbSeverityStyle(sev){
-  if ((sev || "").toUpperCase() === "CRITICAL") {
-    return `background:${TB_CRITICAL_BG}; color:${TB_CRITICAL}; border:1px solid #fecaca;`;
-  }
-  return `background:${TB_GOLD_BG}; color:${TB_GOLD}; border:1px solid #f0e2bb;`;
-}
-
-const TB_LOGO_BASE64 = "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";
-
-function tbLogoBadge(){
-  // Logo real de TrustBoost, incrustado como imagen base64 (no SVG) —
-  // html2canvas captura <img> de forma confiable, a diferencia de SVG
-  // embebido, que le daba una página en blanco sin ningún aviso de error.
-  return `<img src="data:image/jpeg;base64,${TB_LOGO_BASE64}" width="36" height="36" style="display:block; border-radius:6px;" alt="TrustBoost">`;
-}
-
-function buildPrintableReportHtml({data, reportId, txHash, generatedAt}){
-  let findingsHtml = "";
-  (data.findings || []).forEach((f, i) => {
-    const findingId = reportId + "-" + String(i + 1).padStart(2, "0");
-    findingsHtml += `
-      <div style="border:1px solid ${TB_BORDER}; border-radius:6px; padding:18px 20px; margin-bottom:14px; page-break-inside:avoid;">
-        <table style="width:100%; border-collapse:collapse; margin-bottom:10px;"><tr>
-          <td style="font-family:Georgia,'Times New Roman',serif; font-weight:700; font-size:14px; color:${TB_NAVY}; text-align:left;">
-            ${escapeHtml(f.table)} <span style="font-weight:400; font-size:10.5px; color:#94a3b8;">(${findingId})</span>
-          </td>
-          <td style="text-align:right; white-space:nowrap;">
-            <span style="font-size:10px; font-weight:700; letter-spacing:0.5px; padding:3px 9px; border-radius:3px; ${tbSeverityStyle(f.severity || data.overall_severity)}">
-              ${escapeHtml(f.severity || data.overall_severity || "")}
-            </span>
-          </td>
-        </tr></table>
-        <p style="font-size:12px; line-height:1.65; color:${TB_TEXT}; margin:0 0 12px;">${escapeHtml(f.plain_explanation)}</p>
-        <div style="border-left:3px solid ${TB_NAVY}; background:#f8fafc; padding:9px 13px; margin-bottom:10px;">
-          <div style="font-weight:700; font-size:9.5px; letter-spacing:0.7px; color:${TB_NAVY}; margin-bottom:3px;">BUSINESS IMPACT</div>
-          <div style="font-size:11.5px; color:${TB_TEXT};">${escapeHtml(f.business_impact)}</div>
-        </div>
-        ${f.compliance_note ? `
-        <div style="border-left:3px solid ${TB_GOLD}; background:${TB_GOLD_BG}; padding:9px 13px; margin-bottom:12px;">
-          <div style="font-weight:700; font-size:9.5px; letter-spacing:0.7px; color:${TB_GOLD}; margin-bottom:3px;">COMPLIANCE</div>
-          <div style="font-size:11.5px; color:${TB_TEXT};">${escapeHtml(f.compliance_note)}</div>
-        </div>` : ""}
-        <div style="background:#f1f5f9; border:1px solid ${TB_BORDER}; border-radius:4px; padding:11px 13px; font-family:'Courier New',monospace; font-size:10.5px; color:#1e293b; white-space:pre-wrap; word-break:break-word; line-height:1.5;">${escapeHtml(f.sql_fix)}</div>
-      </div>
-    `;
-  });
-
-  const txLine = txHash
-    ? `Paid via USDC on Base — tx ${txHash.slice(0, 10)}...${txHash.slice(-6)}`
-    : "Paid via card, processed by Polar";
-
-  return `
-    <div id="tb-print-root" style="width:760px; background:#ffffff; color:${TB_TEXT}; font-family:Arial,Helvetica,sans-serif; padding:44px;">
-      <table style="width:100%; border-collapse:collapse; border-bottom:3px solid ${TB_GOLD}; padding-bottom:18px; margin-bottom:26px;"><tr>
-        <td style="vertical-align:middle; padding-bottom:18px;">
-          <table style="border-collapse:collapse;"><tr>
-            <td style="padding-right:10px;">${tbLogoBadge()}</td>
-            <td style="vertical-align:middle;">
-              <div style="font-family:Georgia,'Times New Roman',serif; font-size:23px; font-weight:700; color:${TB_NAVY}; letter-spacing:0.3px;">TrustBoost</div>
-              <div style="font-size:10px; color:${TB_GOLD}; font-weight:700; letter-spacing:1.3px; text-transform:uppercase; margin-top:1px;">Free Security Scan</div>
-            </td>
-          </tr></table>
-        </td>
-        <td style="text-align:right; vertical-align:top; font-size:10.5px; color:${TB_TEXT_DIM}; line-height:1.6; padding-bottom:18px;">
-          Report ${reportId}<br>${escapeHtml(data.project_url)}<br>Generated ${generatedAt}
-        </td>
-      </tr></table>
-
-      <div style="display:inline-block; font-size:10.5px; font-weight:700; letter-spacing:0.5px; padding:5px 13px; border-radius:4px; margin-bottom:18px; ${tbSeverityStyle(data.overall_severity)}">
-        SEVERITY: ${escapeHtml(data.overall_severity || "")}
-      </div>
-
-      <p style="font-size:12.5px; line-height:1.7; color:${TB_TEXT}; margin:0 0 26px;">${escapeHtml(data.overall_summary)}</p>
-
-      ${findingsHtml}
-
-      <table style="width:100%; border-collapse:collapse; margin-top:28px; padding-top:14px; border-top:1px solid ${TB_BORDER};"><tr>
-        <td style="font-size:9.5px; color:#94a3b8; text-align:left;">TrustBoost — generated automatically. No data values were read by the AI model.</td>
-        <td style="font-size:9.5px; color:#94a3b8; text-align:right;">${txLine}</td>
-      </tr></table>
-    </div>
-  `;
-}
-
-function downloadReportPdf(reportId){
-  const saved = window.__tbLastReport;
-  if (!saved) return;
-
-  // Se abandonó html2pdf.js / html2canvas por completo — falló de tres
-  // formas distintas (colores, posicionamiento, flexbox/SVG) porque
-  // funciona "fotografiando" la página, algo endémicamente frágil.
-  // En su lugar, usamos la función de impresión nativa del navegador
-  // (window.print), que renderiza el HTML de verdad — sin excepciones,
-  // en cualquier navegador — y deja que la persona lo guarde como PDF
-  // desde el propio diálogo de impresión del sistema.
-  const printHtml = buildPrintableReportHtml(saved);
-  const win = window.open("", "_blank");
-  if (!win) {
-    alert("Your browser blocked the print window. Please allow pop-ups for this site and try again.");
-    return;
-  }
-  win.document.open();
-  win.document.write(`<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<title>${reportId} — TrustBoost Report</title>
-<style>
-  @page { size: A4; margin: 14mm; }
-  body { margin: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-</style>
-</head>
-<body>${printHtml}</body>
-</html>`);
-  win.document.close();
-
-  setTimeout(function(){
-    win.focus();
-    win.print();
-  }, 300);
+function copyPermalink(){
+  const input = document.getElementById("report-permalink");
+  input.select();
+  navigator.clipboard.writeText(input.value);
 }
 
 function copySql(blockId, btn){
