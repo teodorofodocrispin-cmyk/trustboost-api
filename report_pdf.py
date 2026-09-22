@@ -124,6 +124,11 @@ def build_report_html(report_id: str, project_url: str, overall_severity: str,
       <td style="font-size:9.5px; color:#94a3b8;">TrustBoost — generated automatically. No data values were read by the AI model.</td>
       <td align="right" style="font-size:9.5px; color:#94a3b8;">{_esc(payment_line)}</td>
     </tr>
+    <tr>
+      <td colspan="2" style="font-size:9.5px; color:{TB_GOLD}; padding-top:6px;">
+        Lost this file? View or re-download it anytime at: https://api.trustboost.dev/report/{_esc(report_id)}
+      </td>
+    </tr>
   </table>
 </body>
 </html>"""
