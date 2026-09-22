@@ -2917,14 +2917,23 @@ async def report_endpoint(req: ScanRequest, request: Request):
 
     ai_report = await generate_report(report, openai_client)
 
+    report_id = await save_paid_report(
+        project_url=report.project_url,
+        overall_severity=report.overall_severity,
+        overall_summary=ai_report.get("overall_summary", ""),
+        findings=ai_report.get("findings", []),
+        payment_line="Paid via card, processed by Polar",
+    )
+
     return {
         "status": "success",
         "project_url": report.project_url,
         "overall_severity": report.overall_severity,
         "overall_summary": ai_report.get("overall_summary", ""),
         "findings": ai_report.get("findings", []),
+        "report_id": report_id,
+        "report_url": f"https://api.trustboost.dev/report/{report_id}" if report_id else None,
     }
-
 # ── Detailed Report paid via USDC on Base ─────────────────
 class UsdcReportRequest(BaseModel):
     tx_hash: str
@@ -2951,6 +2960,97 @@ async def mark_hash_used(tx_hash: str):
             json={"tx_hash": tx_hash}
         )
 
+# ── Persistencia de reportes pagados ───────────────────────
+# Antes, el reporte solo existía en la memoria del navegador — si la
+# persona cerraba la pestaña sin descargarlo, lo perdía para siempre.
+# Ahora cada reporte pagado se guarda con un ID permanente, y el PDF
+# se genera en el servidor (xhtml2pdf), no en el navegador — nunca más
+# depende de "fotografiar" la página con html2canvas.
+
+async def save_paid_report(project_url: str, overall_severity: str,
+                            overall_summary: str, findings: list,
+                            payment_line: str) -> str | None:
+    async with httpx.AsyncClient() as client:
+        r = await client.post(
+            f"{SUPABASE_URL}/rest/v1/paid_reports",
+            headers={**SUPABASE_HEADERS, "Prefer": "return=representation"},
+            json={
+                "project_url": project_url,
+                "overall_severity": overall_severity,
+                "overall_summary": overall_summary,
+                "findings": findings,
+                "payment_line": payment_line,
+            }
+        )
+        if r.status_code in (200, 201):
+            rows = r.json()
+            if rows and isinstance(rows, list):
+                return rows[0].get("report_id")
+        else:
+            print(f"[save_paid_report] FALLÓ: status={r.status_code} body={r.text[:300]}")
+        return None
+
+
+async def get_paid_report(report_id: str) -> dict | None:
+    async with httpx.AsyncClient() as client:
+        r = await client.get(
+            f"{SUPABASE_URL}/rest/v1/paid_reports",
+            headers=SUPABASE_HEADERS,
+            params={"report_id": f"eq.{report_id}", "select": "*", "limit": "1"}
+        )
+        if r.status_code == 200:
+            rows = r.json()
+            return rows[0] if rows else None
+        return None
+
+
+@app.get("/report/{report_id}", include_in_schema=False)
+async def view_saved_report(report_id: str):
+    saved = await get_paid_report(report_id)
+    if not saved:
+        return HTMLResponse(
+            content="<h1 style='font-family:sans-serif; text-align:center; margin-top:80px;'>Report not found</h1>",
+            status_code=404,
+        )
+    from report_pdf import build_report_html
+    generated_at = (saved.get("created_at") or "")[:10]
+    html = build_report_html(
+        report_id=report_id,
+        project_url=saved.get("project_url", ""),
+        overall_severity=saved.get("overall_severity", ""),
+        overall_summary=saved.get("overall_summary", ""),
+        findings=saved.get("findings") or [],
+        generated_at=generated_at,
+        payment_line=saved.get("payment_line", ""),
+    )
+    download_link = f'<div style="max-width:820px; margin:20px auto 0; font-family:Arial,sans-serif;"><a href="/report/{report_id}/pdf" style="display:inline-block; padding:10px 20px; background:#a8842c; color:#fff; text-decoration:none; border-radius:6px; font-weight:bold;">Download PDF</a></div>'
+    html = html.replace("<body>", "<body>" + download_link, 1)
+    return HTMLResponse(content=html)
+
+
+@app.get("/report/{report_id}/pdf", include_in_schema=False)
+async def download_saved_report_pdf(report_id: str):
+    saved = await get_paid_report(report_id)
+    if not saved:
+        return JSONResponse(status_code=404, content={"status": "error", "message": "Report not found"})
+    from report_pdf import build_report_html, generate_pdf_bytes
+    generated_at = (saved.get("created_at") or "")[:10]
+    html = build_report_html(
+        report_id=report_id,
+        project_url=saved.get("project_url", ""),
+        overall_severity=saved.get("overall_severity", ""),
+        overall_summary=saved.get("overall_summary", ""),
+        findings=saved.get("findings") or [],
+        generated_at=generated_at,
+        payment_line=saved.get("payment_line", ""),
+    )
+    pdf_bytes = generate_pdf_bytes(html)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{report_id}-trustboost-report.pdf"'},
+    )
+
 @app.post("/report-usdc")
 async def report_usdc_endpoint(req: UsdcReportRequest):
     from usdc_verify import verify_base_usdc_payment
@@ -2973,12 +3073,22 @@ async def report_usdc_endpoint(req: UsdcReportRequest):
     report = await scan_project(req.project_url, req.anon_key, app_url=req.app_url)
     ai_report = await generate_report(report, openai_client)
 
+    report_id = await save_paid_report(
+        project_url=report.project_url,
+        overall_severity=report.overall_severity,
+        overall_summary=ai_report.get("overall_summary", ""),
+        findings=ai_report.get("findings", []),
+        payment_line=f"Paid via USDC on Base — tx {req.tx_hash[:10]}...{req.tx_hash[-6:]}",
+    )
+
     return {
         "status": "success",
         "project_url": report.project_url,
         "overall_severity": report.overall_severity,
         "overall_summary": ai_report.get("overall_summary", ""),
         "findings": ai_report.get("findings", []),
+        "report_id": report_id,
+        "report_url": f"https://api.trustboost.dev/report/{report_id}" if report_id else None,
     }
 
 # ── Research batch mode — free, admin-only, for your own market research ──
