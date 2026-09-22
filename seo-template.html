@@ -926,11 +926,13 @@ function tbSeverityStyle(sev){
   return `background:${TB_GOLD_BG}; color:${TB_GOLD}; border:1px solid #f0e2bb;`;
 }
 
-function tbLogoSvg(){
-  return `<svg width="30" height="30" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <path d="M12 2L3 6v6c0 5.25 3.75 9.6 9 11 5.25-1.4 9-5.75 9-11V6l-9-4z" fill="${TB_GOLD}"/>
-    <path d="M9.5 12l1.8 1.8L15 10" stroke="#ffffff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-  </svg>`;
+const TB_LOGO_BASE64 = "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";
+
+function tbLogoBadge(){
+  // Logo real de TrustBoost, incrustado como imagen base64 (no SVG) —
+  // html2canvas captura <img> de forma confiable, a diferencia de SVG
+  // embebido, que le daba una página en blanco sin ningún aviso de error.
+  return `<img src="data:image/jpeg;base64,${TB_LOGO_BASE64}" width="36" height="36" style="display:block; border-radius:6px;" alt="TrustBoost">`;
 }
 
 function buildPrintableReportHtml({data, reportId, txHash, generatedAt}){
@@ -939,14 +941,16 @@ function buildPrintableReportHtml({data, reportId, txHash, generatedAt}){
     const findingId = reportId + "-" + String(i + 1).padStart(2, "0");
     findingsHtml += `
       <div style="border:1px solid ${TB_BORDER}; border-radius:6px; padding:18px 20px; margin-bottom:14px; page-break-inside:avoid;">
-        <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:10px;">
-          <span style="font-family:Georgia,'Times New Roman',serif; font-weight:700; font-size:14px; color:${TB_NAVY};">
+        <table style="width:100%; border-collapse:collapse; margin-bottom:10px;"><tr>
+          <td style="font-family:Georgia,'Times New Roman',serif; font-weight:700; font-size:14px; color:${TB_NAVY}; text-align:left;">
             ${escapeHtml(f.table)} <span style="font-weight:400; font-size:10.5px; color:#94a3b8;">(${findingId})</span>
-          </span>
-          <span style="font-size:10px; font-weight:700; letter-spacing:0.5px; padding:3px 9px; border-radius:3px; ${tbSeverityStyle(f.severity || data.overall_severity)}">
-            ${escapeHtml(f.severity || data.overall_severity || "")}
-          </span>
-        </div>
+          </td>
+          <td style="text-align:right; white-space:nowrap;">
+            <span style="font-size:10px; font-weight:700; letter-spacing:0.5px; padding:3px 9px; border-radius:3px; ${tbSeverityStyle(f.severity || data.overall_severity)}">
+              ${escapeHtml(f.severity || data.overall_severity || "")}
+            </span>
+          </td>
+        </tr></table>
         <p style="font-size:12px; line-height:1.65; color:${TB_TEXT}; margin:0 0 12px;">${escapeHtml(f.plain_explanation)}</p>
         <div style="border-left:3px solid ${TB_NAVY}; background:#f8fafc; padding:9px 13px; margin-bottom:10px;">
           <div style="font-weight:700; font-size:9.5px; letter-spacing:0.7px; color:${TB_NAVY}; margin-bottom:3px;">BUSINESS IMPACT</div>
@@ -968,18 +972,20 @@ function buildPrintableReportHtml({data, reportId, txHash, generatedAt}){
 
   return `
     <div id="tb-print-root" style="width:760px; background:#ffffff; color:${TB_TEXT}; font-family:Arial,Helvetica,sans-serif; padding:44px;">
-      <div style="display:flex; justify-content:space-between; align-items:flex-start; border-bottom:3px solid ${TB_GOLD}; padding-bottom:18px; margin-bottom:26px;">
-        <div style="display:flex; align-items:center; gap:10px;">
-          ${tbLogoSvg()}
-          <div>
-            <div style="font-family:Georgia,'Times New Roman',serif; font-size:23px; font-weight:700; color:${TB_NAVY}; letter-spacing:0.3px;">TrustBoost</div>
-            <div style="font-size:10px; color:${TB_GOLD}; font-weight:700; letter-spacing:1.3px; text-transform:uppercase; margin-top:1px;">Free Security Scan</div>
-          </div>
-        </div>
-        <div style="text-align:right; font-size:10.5px; color:${TB_TEXT_DIM}; line-height:1.6;">
+      <table style="width:100%; border-collapse:collapse; border-bottom:3px solid ${TB_GOLD}; padding-bottom:18px; margin-bottom:26px;"><tr>
+        <td style="vertical-align:middle; padding-bottom:18px;">
+          <table style="border-collapse:collapse;"><tr>
+            <td style="padding-right:10px;">${tbLogoBadge()}</td>
+            <td style="vertical-align:middle;">
+              <div style="font-family:Georgia,'Times New Roman',serif; font-size:23px; font-weight:700; color:${TB_NAVY}; letter-spacing:0.3px;">TrustBoost</div>
+              <div style="font-size:10px; color:${TB_GOLD}; font-weight:700; letter-spacing:1.3px; text-transform:uppercase; margin-top:1px;">Free Security Scan</div>
+            </td>
+          </tr></table>
+        </td>
+        <td style="text-align:right; vertical-align:top; font-size:10.5px; color:${TB_TEXT_DIM}; line-height:1.6; padding-bottom:18px;">
           Report ${reportId}<br>${escapeHtml(data.project_url)}<br>Generated ${generatedAt}
-        </div>
-      </div>
+        </td>
+      </tr></table>
 
       <div style="display:inline-block; font-size:10.5px; font-weight:700; letter-spacing:0.5px; padding:5px 13px; border-radius:4px; margin-bottom:18px; ${tbSeverityStyle(data.overall_severity)}">
         SEVERITY: ${escapeHtml(data.overall_severity || "")}
@@ -989,10 +995,10 @@ function buildPrintableReportHtml({data, reportId, txHash, generatedAt}){
 
       ${findingsHtml}
 
-      <div style="margin-top:28px; padding-top:14px; border-top:1px solid ${TB_BORDER}; font-size:9.5px; color:#94a3b8; display:flex; justify-content:space-between;">
-        <span>TrustBoost — generated automatically. No data values were read by the AI model.</span>
-        <span>${txLine}</span>
-      </div>
+      <table style="width:100%; border-collapse:collapse; margin-top:28px; padding-top:14px; border-top:1px solid ${TB_BORDER};"><tr>
+        <td style="font-size:9.5px; color:#94a3b8; text-align:left;">TrustBoost — generated automatically. No data values were read by the AI model.</td>
+        <td style="font-size:9.5px; color:#94a3b8; text-align:right;">${txLine}</td>
+      </tr></table>
     </div>
   `;
 }
