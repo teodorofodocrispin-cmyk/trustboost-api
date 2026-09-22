@@ -1005,19 +1005,30 @@ function downloadReportPdf(reportId){
   if (!holder) {
     holder = document.createElement("div");
     holder.id = "tb-print-holder";
-    holder.style.cssText = "position:fixed; left:-99999px; top:0; z-index:-1;";
+    // position:absolute (NO "fixed") dentro del flujo normal del documento —
+    // html2canvas captura mal los elementos con position:fixed muy alejados
+    // de la pantalla, resultando en una pagina en blanco. Con "absolute" y
+    // un desplazamiento moderado, el navegador si calcula el layout normal.
+    holder.style.cssText = "position:absolute; left:-9999px; top:0; width:1px; height:1px; overflow:visible;";
     document.body.appendChild(holder);
   }
   holder.innerHTML = buildPrintableReportHtml(saved);
   const el = document.getElementById("tb-print-root");
 
+  if (!el) {
+    console.error("[downloadReportPdf] No se encontró #tb-print-root — revisar buildPrintableReportHtml");
+    return;
+  }
+
   html2pdf().set({
     margin: 10,
     filename: reportId + "-trustboost-report.pdf",
     image: {type: "jpeg", quality: 0.98},
-    html2canvas: {scale: 2, backgroundColor: "#ffffff"},
+    html2canvas: {scale: 2, backgroundColor: "#ffffff", windowWidth: 900},
     jsPDF: {unit: "mm", format: "a4", orientation: "portrait"}
-  }).from(el).save();
+  }).from(el).save().catch(function(err){
+    console.error("[downloadReportPdf] html2pdf falló:", err);
+  });
 }
 
 function copySql(blockId, btn){
