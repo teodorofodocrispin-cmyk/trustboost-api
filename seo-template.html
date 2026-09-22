@@ -330,7 +330,6 @@
     footer .wrap{ flex-direction:column; align-items:flex-start; }
   }
 </style>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 </head>
 <body>
 
@@ -901,7 +900,7 @@ function renderPaidReport(data, txHash){
         <span>${txLine}</span>
       </div>
     </div>
-    <button class="btn" style="margin-top:16px;" onclick="downloadReportPdf('${reportId}')">Download PDF</button>
+    <button class="btn" style="margin-top:16px;" onclick="downloadReportPdf('${reportId}')">Download PDF (opens print dialog — choose "Save as PDF")</button>
   `;
   container.scrollIntoView({behavior:"smooth", block:"start"});
 }
@@ -1007,34 +1006,38 @@ function downloadReportPdf(reportId){
   const saved = window.__tbLastReport;
   if (!saved) return;
 
-  let holder = document.getElementById("tb-print-holder");
-  if (!holder) {
-    holder = document.createElement("div");
-    holder.id = "tb-print-holder";
-    // position:absolute (NO "fixed") dentro del flujo normal del documento —
-    // html2canvas captura mal los elementos con position:fixed muy alejados
-    // de la pantalla, resultando en una pagina en blanco. Con "absolute" y
-    // un desplazamiento moderado, el navegador si calcula el layout normal.
-    holder.style.cssText = "position:absolute; left:-9999px; top:0; width:1px; height:1px; overflow:visible;";
-    document.body.appendChild(holder);
-  }
-  holder.innerHTML = buildPrintableReportHtml(saved);
-  const el = document.getElementById("tb-print-root");
-
-  if (!el) {
-    console.error("[downloadReportPdf] No se encontró #tb-print-root — revisar buildPrintableReportHtml");
+  // Se abandonó html2pdf.js / html2canvas por completo — falló de tres
+  // formas distintas (colores, posicionamiento, flexbox/SVG) porque
+  // funciona "fotografiando" la página, algo endémicamente frágil.
+  // En su lugar, usamos la función de impresión nativa del navegador
+  // (window.print), que renderiza el HTML de verdad — sin excepciones,
+  // en cualquier navegador — y deja que la persona lo guarde como PDF
+  // desde el propio diálogo de impresión del sistema.
+  const printHtml = buildPrintableReportHtml(saved);
+  const win = window.open("", "_blank");
+  if (!win) {
+    alert("Your browser blocked the print window. Please allow pop-ups for this site and try again.");
     return;
   }
+  win.document.open();
+  win.document.write(`<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>${reportId} — TrustBoost Report</title>
+<style>
+  @page { size: A4; margin: 14mm; }
+  body { margin: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+</style>
+</head>
+<body>${printHtml}</body>
+</html>`);
+  win.document.close();
 
-  html2pdf().set({
-    margin: 10,
-    filename: reportId + "-trustboost-report.pdf",
-    image: {type: "jpeg", quality: 0.98},
-    html2canvas: {scale: 2, backgroundColor: "#ffffff", windowWidth: 900},
-    jsPDF: {unit: "mm", format: "a4", orientation: "portrait"}
-  }).from(el).save().catch(function(err){
-    console.error("[downloadReportPdf] html2pdf falló:", err);
-  });
+  setTimeout(function(){
+    win.focus();
+    win.print();
+  }, 300);
 }
 
 function copySql(blockId, btn){
