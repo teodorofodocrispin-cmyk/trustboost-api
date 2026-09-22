@@ -605,6 +605,21 @@ SUPABASE_HEADERS = {
     "Content-Type": "application/json"
 }
 
+# ── Key dedicada (service_role) para las tablas del badge y los reportes
+# pagados ──────────────────────────────────────────────────────────
+# service_role SIEMPRE salta RLS, sin importar las políticas — por eso
+# estas dos tablas pueden tener RLS activado de verdad (no desactivado)
+# sin que el backend deje de poder escribir en ellas. Se usa una key
+# SEPARADA de SUPABASE_KEY (que el resto del archivo, ~4000 líneas, ya
+# usa y funciona) para no arriesgar nada que ya está en producción —
+# este arreglo es quirúrgico, solo toca estas dos tablas.
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", SUPABASE_KEY)
+SUPABASE_SERVICE_HEADERS = {
+    "apikey": SUPABASE_SERVICE_ROLE_KEY,
+    "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+    "Content-Type": "application/json"
+}
+
 # ── Fase 4: Proof of Sanitization on Solana ───────────────
 SOLANA_SERVICE_KEY = os.getenv("SOLANA_SERVICE_PRIVATE_KEY")
 HELIUS_API_KEY     = os.getenv("HELIUS_API_KEY", "")
@@ -2701,7 +2716,7 @@ async def register_clean_scan(app_url: str | None, tables_scanned: int) -> str |
     async with httpx.AsyncClient() as client:
         r = await client.post(
             f"{SUPABASE_URL}/rest/v1/badge_scans",
-            headers={**SUPABASE_HEADERS, "Prefer": "return=representation"},
+            headers={**SUPABASE_SERVICE_HEADERS, "Prefer": "return=representation"},
             json={"app_url": app_url, "tables_scanned": tables_scanned}
         )
         if r.status_code in (200, 201):
@@ -2717,7 +2732,7 @@ async def get_badge_scan(scan_id: str) -> dict | None:
     async with httpx.AsyncClient() as client:
         r = await client.get(
             f"{SUPABASE_URL}/rest/v1/badge_scans",
-            headers=SUPABASE_HEADERS,
+            headers=SUPABASE_SERVICE_HEADERS,
             params={"scan_id": f"eq.{scan_id}", "select": "*", "limit": "1"}
         )
         if r.status_code == 200:
@@ -2973,7 +2988,7 @@ async def save_paid_report(project_url: str, overall_severity: str,
     async with httpx.AsyncClient() as client:
         r = await client.post(
             f"{SUPABASE_URL}/rest/v1/paid_reports",
-            headers={**SUPABASE_HEADERS, "Prefer": "return=representation"},
+            headers={**SUPABASE_SERVICE_HEADERS, "Prefer": "return=representation"},
             json={
                 "project_url": project_url,
                 "overall_severity": overall_severity,
@@ -2995,7 +3010,7 @@ async def get_paid_report(report_id: str) -> dict | None:
     async with httpx.AsyncClient() as client:
         r = await client.get(
             f"{SUPABASE_URL}/rest/v1/paid_reports",
-            headers=SUPABASE_HEADERS,
+            headers=SUPABASE_SERVICE_HEADERS,
             params={"report_id": f"eq.{report_id}", "select": "*", "limit": "1"}
         )
         if r.status_code == 200:
