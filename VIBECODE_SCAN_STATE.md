@@ -681,6 +681,165 @@ próxima tabla que se agregue sin este chequeo explícito.
 
 ---
 
+## 18. Corrección importante: por qué HN marcó el post como [flagged] (21 de septiembre de 2026)
+
+La sección 14 documentó una **hipótesis equivocada** sobre por qué el post
+original de "Show HN" quedó marcado `[flagged]` — se especuló que era el
+filtro automático de HN contra cuentas nuevas publicando un link a
+producto propio.
+
+**La respuesta real llegó por correo de un moderador de HN (Tom):** el
+clasificador de HN detectó que el texto fue **generado por un LLM**, y
+eso — no la cuenta nueva, no el link — fue la causa del flag. HN tiene una
+política explícita y estricta contra esto: *"Write any text that you post
+to HN by hand. Don't use an LLM to generate any of it (not even a tiny
+bit, including to edit or spruce it up)"*. No importa qué tan honesto o
+bien fundamentado esté el contenido — el estilo de escritura de un LLM por
+sí solo es motivo de flag en HN hoy.
+
+**Implicación práctica, distinta a todos los demás canales:** dev.to,
+LinkedIn y X aceptan con normalidad contenido redactado o pulido con
+ayuda de IA — HN es la excepción. De aquí en adelante, cualquier texto
+publicado en HN (posts o comentarios) debe ser escrito a mano por Iv,
+palabra por palabra, sin que pase por un LLM ni para redactar ni para
+editar. El apoyo de IA en este canal específico queda limitado a ayudar a
+pensar la estructura o los puntos clave — nunca a escribir la prosa final.
+
+**Riesgo pendiente sin resolver:** la respuesta al comentario de Cenk
+Kurtoğlu (documentada en la sección 14) también fue redactada por Claude
+y publicada tal cual — corre el mismo riesgo de ser señalada, aunque no
+ha sido marcada hasta la fecha de este registro. No se tomó ninguna
+acción sobre eso, ya que no hay nada que corregir retroactivamente en un
+comentario ya publicado.
+
+**Camino hacia adelante si se reintenta un "Show HN":** el post original
+sigue marcado `[flagged]` y no vale la pena insistir en reflotar ese en
+específico. Un intento futuro debe escribirse desde cero, a mano, por Iv
+— con Claude limitado a revisar la exactitud técnica del contenido, nunca
+a redactar o pulir el texto.
+
+---
+
+## 19. La saga completa del PDF: 4 intentos fallidos, la solución correcta, y persistencia de reportes (21-22 de septiembre de 2026)
+
+Vale la pena documentar esto en detalle porque el proceso de prueba y
+error costó varias rondas, y el patrón de fallas — y la lección de fondo
+— son reutilizables para cualquier función futura que "capture" HTML.
+
+### Los 4 intentos con html2pdf.js / html2canvas (todos abandonados)
+
+El enfoque original: generar el PDF **en el navegador del usuario**,
+usando `html2pdf.js` (que por dentro usa `html2canvas` para "fotografiar"
+el HTML y convertir esa imagen en PDF). Falló de cuatro formas distintas,
+en este orden:
+
+1. **Página completamente negra** — el reporte usaba los mismos colores
+   del tema oscuro del sitio, definidos como variables CSS (`var(--text)`,
+   `var(--border)`). `html2canvas` no resuelve bien esas variables al
+   "fotografiar" la página, así que el texto salía invisible sobre el
+   fondo oscuro.
+2. **Página en blanco (primer intento de arreglo)** — se rediseñó el
+   reporte con una plantilla nueva de fondo blanco y colores literales
+   (sin variables CSS), colocada en un contenedor oculto con
+   `position:fixed` muy alejado de la pantalla (`left:-99999px`) para
+   que `html2canvas` la capturara sin que el usuario la viera. Pero
+   `position:fixed` combinado con desplazamientos extremos es un problema
+   conocido de esta librería — la "foto" salía vacía.
+3. **Página en blanco (segundo intento)** — se cambió a
+   `position:absolute` con un desplazamiento moderado, pero seguía en
+   blanco. La causa real: la plantilla usaba `display:flex` para el
+   encabezado y un `<svg>` incrustado como logo — ambas son áreas con
+   errores históricos y bien documentados en `html2canvas`. Se reconstruyó
+   todo con tablas HTML y un logo hecho en CSS puro (un círculo con un
+   check) — pero **seguía sin funcionar**, esta vez sin ningún error
+   visible, solo páginas en blanco silenciosas.
+4. **Decisión de abandonar el enfoque por completo** — después de tres
+   fallas con la misma librería, se reconoció que el patrón de fondo
+   (una librería de "captura de pantalla" es estructuralmente frágil
+   frente a cualquier CSS que no sepa fotografiar bien) no se iba a
+   resolver con más parches puntuales. Se probó una alternativa distinta:
+   `window.print()` con una ventana nueva y una hoja de estilos de
+   impresión — esto sí generaba contenido visible, pero el usuario
+   reportó, con razón, que un diálogo de "Imprimir documento" donde hay
+   que buscar la opción de "Guardar como PDF" no se siente como la
+   entrega directa de un producto pagado a nivel profesional.
+
+### La solución correcta: generar el PDF en el servidor
+
+Se reemplazó todo el enfoque cliente por generación **server-side**,
+usando `xhtml2pdf` (Python puro, sin dependencias de sistema como
+Pango/Cairo — elegido específicamente por eso, para no repetir una
+sorpresa de "funciona en local pero no en Render"). Se construyó:
+
+- **`report_pdf.py`** — módulo nuevo con `build_report_html()` (arma el
+  HTML del reporte en Python, mismos colores azul/dorado/blanco, logo
+  incrustado en base64) y `generate_pdf_bytes()` (convierte ese HTML a
+  PDF real, en memoria, con `xhtml2pdf`).
+- **`tb_logo_base64.txt`** — el logo real que Iv proporcionó (una imagen
+  de escudo + candado), recortado a cuadrado y reducido a 140×140px antes
+  de convertirlo a base64, para mantener el archivo liviano.
+- El botón "Download PDF" en el frontend pasó de ejecutar JavaScript
+  complicado a ser un simple link `<a href="/report/{id}/pdf">` — descarga
+  directa, sin diálogos, sin JavaScript frágil de por medio.
+
+Verificado generando un PDF de prueba real con el código exacto del repo
+y convirtiéndolo a imagen para inspección visual — se ve exactamente como
+se diseñó, con el logo, los colores corporativos, y las cajas de business
+impact / compliance / SQL fix bien diferenciadas.
+
+### El problema no resuelto de fondo: reportes que se perdían
+
+Iv señaló, con razón, que además de la fragilidad del PDF había un
+riesgo de negocio real: si alguien pagaba y cerraba la pestaña antes de
+descargar, perdía su reporte para siempre — un motivo legítimo de
+inconformidad para un producto pagado.
+
+**La solución, construida junto con el arreglo del PDF:**
+
+- Tabla nueva `paid_reports` en Supabase — cada reporte pagado (vía
+  Polar o USDC) se guarda con un `report_id` (UUID) permanente.
+- `GET /report/{report_id}` — página web pública para volver a ver el
+  reporte en cualquier momento.
+- `GET /report/{report_id}/pdf` — reg-genera el PDF on-demand desde los
+  datos guardados, sin depender de que la sesión original siga activa.
+- El frontend ahora muestra, justo debajo de cada reporte pagado, una
+  caja verde destacada: *"📌 Save this link — it's the only way to
+  access your report again"*, con el link y un botón de copiar.
+- **El PDF mismo también incluye el link de rescate** en el pie de
+  página (a pedido explícito de Iv) — así, incluso si la persona solo
+  conserva el archivo PDF (lo reenvía, lo guarda en otro lado), puede
+  volver al reporte en línea sin depender de haber guardado el link por
+  separado.
+
+### La misma lección de RLS, por tercera vez — ahora sí como checklist
+
+La tabla `paid_reports` se creó inicialmente con RLS activado y sin
+política de inserción — **exactamente el mismo bug que ya había pasado
+con `badge_scans`** (sección 17), a pesar de que esa sección ya lo dejó
+documentado como lección a aplicar. Esto confirma que "documentarlo" no
+fue suficiente para evitar repetirlo — hace falta un paso explícito y
+mecánico, no solo una nota de advertencia.
+
+**Regla concreta para toda tabla nueva de aquí en adelante, sin
+excepción:** si la tabla es de uso exclusivo del propio backend (nunca
+se expone a clientes externos directamente, como `badge_scans` y
+`paid_reports`), el SQL de creación debe incluir siempre, en la misma
+sentencia, la línea `alter table <nombre> disable row level security;`
+— nunca como un paso separado que se pueda olvidar.
+
+### Estado final verificado en producción
+
+Todo el flujo se confirmó de punta a punta: pago con USDC → escaneo →
+reporte generado → guardado en `paid_reports` → botón de descarga real
+funcionando → caja de link permanente visible → PDF descargado
+conteniendo el link de rescate en el pie. El precio de prueba (que se
+había bajado a $0.10 en tres archivos para poder probar el flujo pagado
+sin gastar de verdad) se devolvió a $49 en los tres lugares
+(`main.py`, `scan-landing.html`, `seo-template.html`) una vez confirmado
+que todo funcionaba.
+
+---
+
 ## Cómo actualizar este documento
 
 Cuando se tome una decisión de negocio o de arquitectura (no un simple
