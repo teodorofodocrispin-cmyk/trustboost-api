@@ -840,6 +840,58 @@ que todo funcionaba.
 
 ---
 
+## 20. Investigación de benchmarks de tráfico/ventas reales + publicación en PeerPush (22 de septiembre de 2026)
+
+**Investigación previa a esta decisión:** se buscó calibrar expectativas
+comparando con datos reales de otros SaaS, no solo con la existencia de
+competidores. Hallazgos clave:
+
+- Un estudio de Ahrefs sobre 218,713 dominios reales sitúa el benchmark
+  honesto de SEO orgánico para SaaS B2B en **9 a 12 meses** hasta ingresos
+  medibles — la referencia general de la industria.
+- **Caso real documentado que contradice la intuición:** un fundador de
+  un SaaS de bienes raíces triplicó su tráfico orgánico (2,000 → 8,000
+  impresiones diarias) en 14 días, y tuvo **cero registros nuevos** en
+  ese periodo. Sus clientes reales llegaron de plataformas de
+  descubrimiento (BetaList, PeerPush, Indie Hackers) — tráfico ≠ clientes,
+  la intención de la fuente importa más que el volumen.
+- **Por qué el caso de TrustBoost podría ser más rápido que el
+  benchmark genérico:** las 20 páginas de SEO apuntan a búsquedas de
+  miedo de alta intención ("is my lovable app safe"), no a contenido
+  educativo de fondo de embudo — la misma estrategia que ya le funcionó
+  a VAS (competidor con ingresos verificados). Esto no garantiza un
+  resultado más rápido, pero es una diferencia estructural real frente
+  al benchmark genérico de blogs de SaaS.
+
+**Decisión resultante:** publicar en PeerPush como canal complementario
+al SEO, ya que varios competidores directos (VibeDoctor, UNPWNED,
+VibeGuard) ya están listados ahí, y el caso real de arriba muestra que
+estas plataformas de descubrimiento generan clientes de forma distinta
+(y a veces más efectiva) que el tráfico orgánico puro.
+
+**Ficha publicada** (nivel gratuito): nombre TrustBoost, tagline "Free
+security scanner for Lovable, Bolt & Base44 apps", categorías Developer
+Tools / AI Tools / Security, pricing Freemium, precio de partida $0,
+alternativas listadas: VibeDoctor, UNPWNED, Supabase Security Advisor.
+MRR se dejó vacío intencionalmente — no hay ingresos confirmados
+todavía, y PeerPush premia la transparencia real sobre inflar cifras.
+
+**Resultado inmediato:** el producto quedó en cola de publicación
+gratuita en la **posición #3539**, con una espera estimada de **~1 mes y
+29 días**. Existen opciones pagas para saltar la fila ($35 instantáneo,
+$89 con 7 días destacado, $189 con 30 días) — se decidió **no pagar por
+ahora**, siguiendo la misma disciplina aplicada a SEO y HN: no invertir
+dinero en aceleración hasta tener evidencia de que al menos un canal ya
+convierte.
+
+**Seguimiento pendiente:** revisar el correo o PeerPush directamente en
+6-8 semanas para confirmar la publicación, y en ese momento evaluar si
+vale la pena el impulso pago para lanzamientos futuros (por ejemplo, al
+publicar la primera actualización de "build in public" cuando llegue la
+primera venta real confirmada).
+
+---
+
 ## Cómo actualizar este documento
 
 Cuando se tome una decisión de negocio o de arquitectura (no un simple
