@@ -851,6 +851,11 @@ function renderPaidReport(data, txHash){
 
   const reportId = "TB-" + new Date().getFullYear() + "-" + Math.floor(1000 + Math.random() * 9000);
 
+  // Guardado para que downloadReportPdf arme la versión imprimible
+  // (fondo blanco, azul/dorado) sin depender de ningún color del tema
+  // oscuro del sitio.
+  window.__tbLastReport = { data, reportId, txHash, generatedAt };
+
   let findingsHtml = "";
   (data.findings || []).forEach((f, i)=>{
     const blockId = "sql-block-" + i;
@@ -905,13 +910,116 @@ function renderPaidReport(data, txHash){
   container.scrollIntoView({behavior:"smooth", block:"start"});
 }
 
+// ── Plantilla del PDF — fondo blanco, azul y dorado corporativos ──
+// Completamente independiente del tema oscuro del sitio: todos los
+// colores son literales (no variables CSS), así que html2canvas los
+// captura sin ambigüedad, sin importar qué tema tenga el navegador.
+const TB_NAVY = "#0f2a4a";
+const TB_GOLD = "#a8842c";
+const TB_GOLD_BG = "#fdf8ec";
+const TB_TEXT = "#1f2937";
+const TB_TEXT_DIM = "#64748b";
+const TB_BORDER = "#e2e8f0";
+const TB_CRITICAL = "#9a3412";
+const TB_CRITICAL_BG = "#fef2f2";
+
+function tbSeverityStyle(sev){
+  if ((sev || "").toUpperCase() === "CRITICAL") {
+    return `background:${TB_CRITICAL_BG}; color:${TB_CRITICAL}; border:1px solid #fecaca;`;
+  }
+  return `background:${TB_GOLD_BG}; color:${TB_GOLD}; border:1px solid #f0e2bb;`;
+}
+
+function tbLogoSvg(){
+  return `<svg width="30" height="30" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path d="M12 2L3 6v6c0 5.25 3.75 9.6 9 11 5.25-1.4 9-5.75 9-11V6l-9-4z" fill="${TB_GOLD}"/>
+    <path d="M9.5 12l1.8 1.8L15 10" stroke="#ffffff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>`;
+}
+
+function buildPrintableReportHtml({data, reportId, txHash, generatedAt}){
+  let findingsHtml = "";
+  (data.findings || []).forEach((f, i) => {
+    const findingId = reportId + "-" + String(i + 1).padStart(2, "0");
+    findingsHtml += `
+      <div style="border:1px solid ${TB_BORDER}; border-radius:6px; padding:18px 20px; margin-bottom:14px; page-break-inside:avoid;">
+        <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:10px;">
+          <span style="font-family:Georgia,'Times New Roman',serif; font-weight:700; font-size:14px; color:${TB_NAVY};">
+            ${escapeHtml(f.table)} <span style="font-weight:400; font-size:10.5px; color:#94a3b8;">(${findingId})</span>
+          </span>
+          <span style="font-size:10px; font-weight:700; letter-spacing:0.5px; padding:3px 9px; border-radius:3px; ${tbSeverityStyle(f.severity || data.overall_severity)}">
+            ${escapeHtml(f.severity || data.overall_severity || "")}
+          </span>
+        </div>
+        <p style="font-size:12px; line-height:1.65; color:${TB_TEXT}; margin:0 0 12px;">${escapeHtml(f.plain_explanation)}</p>
+        <div style="border-left:3px solid ${TB_NAVY}; background:#f8fafc; padding:9px 13px; margin-bottom:10px;">
+          <div style="font-weight:700; font-size:9.5px; letter-spacing:0.7px; color:${TB_NAVY}; margin-bottom:3px;">BUSINESS IMPACT</div>
+          <div style="font-size:11.5px; color:${TB_TEXT};">${escapeHtml(f.business_impact)}</div>
+        </div>
+        ${f.compliance_note ? `
+        <div style="border-left:3px solid ${TB_GOLD}; background:${TB_GOLD_BG}; padding:9px 13px; margin-bottom:12px;">
+          <div style="font-weight:700; font-size:9.5px; letter-spacing:0.7px; color:${TB_GOLD}; margin-bottom:3px;">COMPLIANCE</div>
+          <div style="font-size:11.5px; color:${TB_TEXT};">${escapeHtml(f.compliance_note)}</div>
+        </div>` : ""}
+        <div style="background:#f1f5f9; border:1px solid ${TB_BORDER}; border-radius:4px; padding:11px 13px; font-family:'Courier New',monospace; font-size:10.5px; color:#1e293b; white-space:pre-wrap; word-break:break-word; line-height:1.5;">${escapeHtml(f.sql_fix)}</div>
+      </div>
+    `;
+  });
+
+  const txLine = txHash
+    ? `Paid via USDC on Base — tx ${txHash.slice(0, 10)}...${txHash.slice(-6)}`
+    : "Paid via card, processed by Polar";
+
+  return `
+    <div id="tb-print-root" style="width:760px; background:#ffffff; color:${TB_TEXT}; font-family:Arial,Helvetica,sans-serif; padding:44px;">
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; border-bottom:3px solid ${TB_GOLD}; padding-bottom:18px; margin-bottom:26px;">
+        <div style="display:flex; align-items:center; gap:10px;">
+          ${tbLogoSvg()}
+          <div>
+            <div style="font-family:Georgia,'Times New Roman',serif; font-size:23px; font-weight:700; color:${TB_NAVY}; letter-spacing:0.3px;">TrustBoost</div>
+            <div style="font-size:10px; color:${TB_GOLD}; font-weight:700; letter-spacing:1.3px; text-transform:uppercase; margin-top:1px;">Free Security Scan</div>
+          </div>
+        </div>
+        <div style="text-align:right; font-size:10.5px; color:${TB_TEXT_DIM}; line-height:1.6;">
+          Report ${reportId}<br>${escapeHtml(data.project_url)}<br>Generated ${generatedAt}
+        </div>
+      </div>
+
+      <div style="display:inline-block; font-size:10.5px; font-weight:700; letter-spacing:0.5px; padding:5px 13px; border-radius:4px; margin-bottom:18px; ${tbSeverityStyle(data.overall_severity)}">
+        SEVERITY: ${escapeHtml(data.overall_severity || "")}
+      </div>
+
+      <p style="font-size:12.5px; line-height:1.7; color:${TB_TEXT}; margin:0 0 26px;">${escapeHtml(data.overall_summary)}</p>
+
+      ${findingsHtml}
+
+      <div style="margin-top:28px; padding-top:14px; border-top:1px solid ${TB_BORDER}; font-size:9.5px; color:#94a3b8; display:flex; justify-content:space-between;">
+        <span>TrustBoost — generated automatically. No data values were read by the AI model.</span>
+        <span>${txLine}</span>
+      </div>
+    </div>
+  `;
+}
+
 function downloadReportPdf(reportId){
-  const el = document.getElementById("report-doc-content");
+  const saved = window.__tbLastReport;
+  if (!saved) return;
+
+  let holder = document.getElementById("tb-print-holder");
+  if (!holder) {
+    holder = document.createElement("div");
+    holder.id = "tb-print-holder";
+    holder.style.cssText = "position:fixed; left:-99999px; top:0; z-index:-1;";
+    document.body.appendChild(holder);
+  }
+  holder.innerHTML = buildPrintableReportHtml(saved);
+  const el = document.getElementById("tb-print-root");
+
   html2pdf().set({
     margin: 10,
     filename: reportId + "-trustboost-report.pdf",
     image: {type: "jpeg", quality: 0.98},
-    html2canvas: {scale: 2, backgroundColor: "#0d0d12"},
+    html2canvas: {scale: 2, backgroundColor: "#ffffff"},
     jsPDF: {unit: "mm", format: "a4", orientation: "portrait"}
   }).from(el).save();
 }
