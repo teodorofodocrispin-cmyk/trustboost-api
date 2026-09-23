@@ -20,7 +20,7 @@ MCP_SECURITY_MANIFEST = {
     "tools": [
         {
             "name": "scan_supabase_security",
-            "description": "Scans a Supabase project for the most common vibe-coding security gap: missing Row Level Security, exposed storage buckets, and leaked service_role keys. Read-only — never writes or modifies anything. Input: the project's URL and its public anon key (both already visible in the app's own frontend code).",
+            "description": "Scans a Supabase project for the most common vibe-coding security gap: missing Row Level Security, exposed storage buckets, and leaked service_role keys. Read-only — never writes or modifies anything. Requires explicit confirmation that the caller owns the project or has authorization to test it. Input: the project's URL and its public anon key (both already visible in the app's own frontend code).",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -32,13 +32,17 @@ MCP_SECURITY_MANIFEST = {
                         "type": "string",
                         "description": "The project's public anon key (never the service_role key)."
                     },
+                    "authorized": {
+                        "type": "boolean",
+                        "description": "Must be true. Confirms the caller owns this project or has explicit authorization from its owner to scan it."
+                    },
                     "app_url": {
                         "type": "string",
                         "description": "Optional: the deployed app's own URL. Enables an extra check for a leaked service_role key in the app's public frontend code.",
                         "default": ""
                     }
                 },
-                "required": ["project_url", "anon_key"]
+                "required": ["project_url", "anon_key", "authorized"]
             }
         },
         {
@@ -70,6 +74,13 @@ async def _execute_scan_supabase_security(tool_input: dict):
     project_url = (tool_input.get("project_url") or "").strip()
     anon_key = (tool_input.get("anon_key") or "").strip()
     app_url = (tool_input.get("app_url") or "").strip() or None
+    authorized = tool_input.get("authorized") is True
+
+    if not authorized:
+        raise ValueError(
+            "AUTHORIZATION_REQUIRED: set authorized=true to confirm you own this "
+            "project or have explicit authorization from its owner to scan it."
+        )
 
     if not project_url or ".supabase.co" not in project_url:
         raise ValueError("INVALID_PROJECT_URL")
