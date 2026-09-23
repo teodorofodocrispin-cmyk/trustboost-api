@@ -960,6 +960,81 @@ a $49 en los tres archivos (`main.py`, `scan-landing.html`,
 
 ---
 
+## 22. Servidor MCP de seguridad + slopsquatting — construido, publicado, y corregido en consentimiento (23 de septiembre de 2026)
+
+**Investigación previa que originó esto:** buscando qué necesidad de
+cliente aún no cubre ningún competidor, se encontró **slopsquatting**
+— cuando un modelo de IA recomienda un paquete de código que no existe
+de verdad, y un atacante lo registra a propósito esperando a que
+alguien lo instale. Datos que lo respaldan:
+
+- **19.7%** de las respuestas de código de LLMs recomienda al menos un
+  paquete inventado (estudio USENIX Security 2025, 2.23M muestras de
+  código, 16 modelos).
+- **43%** de esos nombres inventados se repite exactamente igual cada
+  vez que se le pregunta lo mismo al modelo — un atacante no necesita
+  adivinar, solo leer la lista.
+- Casos reales confirmados: `huggingface-cli` (30,000+ descargas antes
+  de ser detectado), `react-codeshift` (237 repositorios infectados).
+- **Escalada muy reciente:** entre el 3 y 5 de agosto de 2026, la
+  campaña "Flooding Dropper" publicó casi 800 paquetes maliciosos en
+  npm (creciendo a más de 1,000), entregando malware de robo de
+  información a gran escala.
+
+**Por qué se decidió construirlo ahora, rompiendo la disciplina
+habitual de "esperar evidencia":** a diferencia de otras ideas
+pospuestas (calificación A-F, lógica de políticas RLS), este caso
+combinaba dos condiciones que cambiaban el cálculo — costo de
+construcción genuinamente bajo (días, no semanas) y una ventana de
+oportunidad de primeros movimiento real, sobre un término de búsqueda
+que se volvió masivo hace apenas semanas y que ningún competidor del
+nicho específico (Supabase + vibe coding) ha reclamado todavía.
+
+**Lo construido, de forma quirúrgica** (cero cambios a lo que ya
+funcionaba, reutilizando el patrón exacto de `mcp_router.py`, el
+servidor MCP ya existente del producto de PII):
+
+1. **`dependency_check.py`** (nuevo) — revisa un `package.json` contra
+   el registro público de npm y OSV.dev (la base de vulnerabilidades de
+   Google) **en vivo**, sin mantener ninguna lista propia de paquetes
+   maliciosos que se volvería vieja con el tiempo. Ambas APIs son
+   gratuitas, públicas, y no requieren llave.
+2. **`mcp_security_router.py`** (nuevo) — servidor MCP separado del de
+   PII, montado en `/mcp/scan` (para no chocar con `/mcp`), con dos
+   herramientas: `scan_supabase_security` (envuelve el escáner ya
+   existente) y `check_dependencies` (usa el módulo de arriba).
+3. **`main.py`**: solo 3 líneas nuevas para conectar el router — el
+   resto del archivo de ~4,100 líneas quedó intacto.
+
+Verificado con una prueba real contra el registro de npm: un paquete
+inventado a propósito (`react-codeshift-totally-fake-hallucinated-xyz123`)
+fue marcado correctamente como CRÍTICO, mientras que paquetes reales
+(`react`, `lodash`) pasaron limpios.
+
+**Corrección de consentimiento, aplicada tras revisar el aspecto
+legal:** la versión web del escáner (`/free-scan`) siempre tuvo una
+casilla explícita ("I own this project, or I have explicit
+authorization..."). La primera versión del servidor MCP no tenía un
+equivalente — cualquiera podía invocar `scan_supabase_security` sin
+ningún gesto de consentimiento. Se corrigió agregando un parámetro
+`authorized` (booleano, obligatorio) que el ejecutor valida de verdad
+(no solo lo menciona en la descripción) — si no viene en `true`, la
+herramienta rechaza la llamada con un mensaje explícito.
+
+**Contenido publicado en paralelo:** artículo en dev.to conectando la
+marca con esta amenaza fresca, citando los datos de arriba de forma
+parafraseada, mencionando que el chequeo ya existe y funciona en el
+servidor MCP.
+
+**Nota honesta pendiente:** el servidor MCP nuevo aún no aparece en
+ningún directorio (a diferencia del servidor de PII, que sí está
+indexado en mcpbundles.com) — es demasiado reciente. Vale la pena
+registrarlo ahí y en otros directorios de MCP cuando haya tiempo,
+como parte de la misma estrategia de distribución que ya se sigue con
+PeerPush.
+
+---
+
 ## Cómo actualizar este documento
 
 Cuando se tome una decisión de negocio o de arquitectura (no un simple
