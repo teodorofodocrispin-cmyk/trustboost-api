@@ -3052,14 +3052,22 @@ async def polar_webhook(request: Request):
     from polar_sdk.webhooks import validate_event, WebhookVerificationError
 
     body = await request.body()
+
+    incoming_headers = {k.lower(): v for k, v in request.headers.items()}
+    has_id = "webhook-id" in incoming_headers
+    has_ts = "webhook-timestamp" in incoming_headers
+    has_sig = "webhook-signature" in incoming_headers
+    print(f"[polar_webhook] headers recibidos: webhook-id={has_id} webhook-timestamp={has_ts} webhook-signature={has_sig} | todos los headers: {list(incoming_headers.keys())}")
+
     try:
         event = validate_event(
             body=body,
             headers=dict(request.headers),
             secret=POLAR_WEBHOOK_SECRET,
         )
-    except WebhookVerificationError:
-        return JSONResponse(status_code=403, content={"error": "invalid signature"})
+    except WebhookVerificationError as e:
+        print(f"[polar_webhook] WebhookVerificationError: {str(e)}")
+        return JSONResponse(status_code=403, content={"error": "invalid signature", "detail": str(e)})
     except Exception as e:
         print(f"[polar_webhook] error de verificación: {type(e).__name__}: {str(e)[:200]}")
         return JSONResponse(status_code=400, content={"error": "malformed webhook"})
