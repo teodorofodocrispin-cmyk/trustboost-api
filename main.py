@@ -3077,6 +3077,7 @@ async def check_polar_checkout_status(checkout_id: str) -> str | None:
     Polar. Devuelve 'succeeded', 'confirmed', 'failed', 'open', u otro
     valor de estado — o None si no se pudo consultar."""
     if not POLAR_ACCESS_TOKEN:
+        print("[check_polar_checkout_status] POLAR_ACCESS_TOKEN no está configurado")
         return None
     async with httpx.AsyncClient() as client:
         r = await client.get(
@@ -3085,8 +3086,10 @@ async def check_polar_checkout_status(checkout_id: str) -> str | None:
             timeout=10,
         )
         if r.status_code == 200:
-            return r.json().get("status")
-        print(f"[check_polar_checkout_status] status={r.status_code} body={r.text[:200]}")
+            estado = r.json().get("status")
+            print(f"[check_polar_checkout_status] checkout_id={checkout_id} status={estado}")
+            return estado
+        print(f"[check_polar_checkout_status] FALLÓ: checkout_id={checkout_id} http_status={r.status_code} body={r.text[:300]}")
         return None
 
 
