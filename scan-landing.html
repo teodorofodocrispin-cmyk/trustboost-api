@@ -896,6 +896,13 @@ async function unlockReportWithCardAuto(checkoutId, projectUrl, anonKey, appUrl)
   const checkoutId = params.get("checkout_id");
   if(!checkoutId) return;
 
+  // #paid-report vive dentro de #results, que está oculto por CSS
+  // (display:none) hasta que se le agrega la clase "active" — algo que
+  // normalmente pasa solo al terminar un escaneo normal. Al volver de
+  // un pago no corre ningún escaneo, así que hay que activarla aquí
+  // también, o el contenido se escribe correctamente pero nadie lo ve.
+  document.getElementById("results").classList.add("active");
+
   const saved = localStorage.getItem("tb_pending_scan");
   if(!saved){
     document.getElementById("paid-report").innerHTML =
