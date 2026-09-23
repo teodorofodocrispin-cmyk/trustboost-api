@@ -58,6 +58,7 @@ SUPABASE_URL          = os.getenv("SUPABASE_URL")
 SUPABASE_KEY          = os.getenv("SUPABASE_KEY")
 PAYMENT_WALLET        = os.getenv("PAYMENT_WALLET")
 POLAR_WEBHOOK_SECRET  = os.getenv("POLAR_WEBHOOK_SECRET", "")
+print(f"[DIAG] POLAR_WEBHOOK_SECRET present: {bool(POLAR_WEBHOOK_SECRET)}, length: {len(POLAR_WEBHOOK_SECRET)}")
 TRIAL_QUOTA           = int(os.getenv("TRIAL_QUOTA", "50"))
 PAID_QUOTA            = int(os.getenv("PAID_QUOTA", "10000"))
 REQUIRED_PAYMENT_USDC = int(os.getenv("REQUIRED_PAYMENT_USDC", "149"))
@@ -3012,11 +3013,13 @@ async def mark_hash_used(tx_hash: str):
 
 async def store_polar_payment(order_id: str, status: str):
     async with httpx.AsyncClient() as client:
-        await client.post(
+        r = await client.post(
             f"{SUPABASE_URL}/rest/v1/polar_payments",
             headers={**SUPABASE_HEADERS, "Prefer": "resolution=merge-duplicates"},
             json={"order_id": order_id, "status": status}
         )
+        if r.status_code not in (200, 201, 204):
+            print(f"[store_polar_payment] FALLÓ: status={r.status_code} body={r.text[:300]}")
 
 async def get_polar_payment(order_id: str) -> dict | None:
     async with httpx.AsyncClient() as client:
@@ -3061,7 +3064,10 @@ async def polar_webhook(request: Request):
         return JSONResponse(status_code=400, content={"error": "malformed webhook"})
 
     if event.type == "order.paid":
+        print(f"[polar_webhook] order.paid recibido: order_id={event.data.id}")
         await store_polar_payment(event.data.id, "paid")
+    else:
+        print(f"[polar_webhook] evento recibido pero ignorado (no es order.paid): {event.type}")
 
     return JSONResponse(content={"received": True})
 
