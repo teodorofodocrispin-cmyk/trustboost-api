@@ -415,11 +415,8 @@
         <div class="cta-price mono">$49</div>
         <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-start;">
           <div style="flex:1; min-width:160px;">
-            <a class="btn btn-ghost" href="https://buy.polar.sh/polar_cl_OTntcCWeVUMxe0jiLlgkwdJNvxDBUMD7X9nbh1srAXb" target="_blank" rel="noopener" style="text-decoration:none; display:block; width:100%;">Pay with card</a>
-            <input type="text" id="polar-order-id" placeholder="Order ID from your receipt email" style="width:100%; margin-top:8px; padding:8px 10px; background:var(--bg-2,#0d0d12); border:1px solid var(--border); border-radius:6px; color:var(--text); font-size:0.8rem; box-sizing:border-box;">
-            <button class="btn" id="polar-btn" onclick="unlockReportWithCard()" style="width:100%; margin-top:6px;">Unlock report</button>
-            <p style="font-size:0.72rem; color:var(--text-dim); margin:8px 0 0; line-height:1.4;">After paying, check your email for the Polar receipt and paste the Order ID here.</p>
-            <div class="error-msg" id="polar-msg" style="margin-top:8px;"></div>
+            <a class="btn btn-ghost" href="https://buy.polar.sh/polar_cl_OTntcCWeVUMxe0jiLlgkwdJNvxDBUMD7X9nbh1srAXb" target="_blank" rel="noopener" onclick="saveCardCheckoutState()" style="text-decoration:none; display:block; width:100%;">Pay with card</a>
+            <p style="font-size:0.72rem; color:var(--text-dim); margin:8px 0 0; line-height:1.4;">Opens in a new tab. After paying, you'll come back here automatically — nothing to copy.</p>
           </div>
           <div style="flex:1; min-width:160px;">
             <button class="btn" id="usdc-btn" onclick="payWithUSDC()" style="width:100%;">Pay with USDC</button>
@@ -841,65 +838,74 @@ async function unlockReportWithUsdc(txHash, projectUrl, anonKey, appUrl){
   }
 }
 
-async function unlockReportWithCard(){
-  const orderId = document.getElementById("polar-order-id").value.trim();
-  const polarBtn = document.getElementById("polar-btn");
-  const polarMsg = document.getElementById("polar-msg");
-
-  if(!orderId){
-    polarMsg.textContent = "Paste your Order ID first — check your email for the Polar receipt.";
-    polarMsg.style.display = "block";
-    return;
-  }
-
+function saveCardCheckoutState(){
+  // Se guarda justo antes de que la persona salga a pagar a Polar —
+  // así, cuando Polar la traiga de vuelta a una página completamente
+  // nueva (sin memoria de JavaScript de la página anterior), podemos
+  // recuperar lo que había escrito y terminar el flujo sin pedirle
+  // que copie ni pegue nada.
   const projectUrl = document.getElementById("project_url").value.trim();
   const anonKey = document.getElementById("anon_key").value.trim();
   const appUrl = document.getElementById("app_url").value.trim();
+  localStorage.setItem("tb_pending_scan", JSON.stringify({projectUrl, anonKey, appUrl}));
+}
 
-  polarBtn.disabled = true;
-  polarMsg.style.display = "none";
+async function unlockReportWithCardAuto(checkoutId, projectUrl, anonKey, appUrl){
+  const container = document.getElementById("paid-report");
+  container.innerHTML = `<div class="error-msg" id="polar-return-msg" style="display:block;">Confirming your payment...</div>`;
+  const statusMsg = document.getElementById("polar-return-msg");
   const maxAttempts = 8;
 
   for(let attempt = 1; attempt <= maxAttempts; attempt++){
     try{
-      polarBtn.textContent = attempt === 1 ? "Checking payment..." : "Still checking...";
       const resp = await fetch(REPORT_CARD_URL, {
         method: "POST",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({order_id: orderId, project_url: projectUrl, anon_key: anonKey, app_url: appUrl || null})
+        body: JSON.stringify({checkout_id: checkoutId, project_url: projectUrl, anon_key: anonKey, app_url: appUrl || null})
       });
       const data = await resp.json();
 
       if(resp.ok){
+        localStorage.removeItem("tb_pending_scan");
         renderPaidReport(data, null);
-        polarBtn.disabled = false;
-        polarBtn.textContent = "Unlock report";
         return;
       }
 
       if(resp.status === 402 && attempt < maxAttempts){
-        // El pago aún no llegó confirmado por el webhook — normal en
-        // los primeros segundos, reintentamos.
+        statusMsg.textContent = `Confirming your payment... (${attempt}/${maxAttempts})`;
         await new Promise(r => setTimeout(r, 3000));
         continue;
       }
 
-      polarMsg.textContent = data.message || "Could not verify this payment.";
-      polarMsg.style.display = "block";
-      polarBtn.disabled = false;
-      polarBtn.textContent = "Unlock report";
+      statusMsg.textContent = data.message || "Could not verify this payment. Contact support@trustboost.dev with this checkout ID: " + checkoutId;
       return;
 
     }catch(e){
       if(attempt === maxAttempts){
-        polarMsg.textContent = "We couldn't confirm this yet. If you already paid, contact support@trustboost.dev with your Order ID: " + orderId;
-        polarMsg.style.display = "block";
-        polarBtn.disabled = false;
-        polarBtn.textContent = "Unlock report";
+        statusMsg.textContent = "We couldn't confirm this yet. Contact support@trustboost.dev with this checkout ID: " + checkoutId;
       }
     }
   }
 }
+
+// Al cargar la página, revisa si venimos de vuelta de un pago exitoso
+// en Polar (trae ?checkout_id=... en la URL) y, si es así, retoma el
+// flujo automáticamente usando lo que se guardó en saveCardCheckoutState().
+(function checkForCardPaymentReturn(){
+  const params = new URLSearchParams(window.location.search);
+  const checkoutId = params.get("checkout_id");
+  if(!checkoutId) return;
+
+  const saved = localStorage.getItem("tb_pending_scan");
+  if(!saved){
+    document.getElementById("paid-report").innerHTML =
+      `<div class="error-msg" style="display:block;">Payment confirmed, but we lost track of your scan details (maybe this is a different browser or tab). Contact support@trustboost.dev with this checkout ID: ${escapeHtml(checkoutId)}</div>`;
+    return;
+  }
+
+  const {projectUrl, anonKey, appUrl} = JSON.parse(saved);
+  unlockReportWithCardAuto(checkoutId, projectUrl, anonKey, appUrl);
+})();
 
 function escapeHtml(s){
   return (s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
