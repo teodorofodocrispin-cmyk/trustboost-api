@@ -414,9 +414,12 @@
         <p>Every finding explained in plain language, with severity and exact fix.</p>
         <div class="cta-price mono">$49</div>
         <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-start;">
-          <div style="flex:1; min-width:160px;">
+<div style="flex:1; min-width:160px;">
             <a class="btn btn-ghost" href="https://buy.polar.sh/polar_cl_OTntcCWeVUMxe0jiLlgkwdJNvxDBUMD7X9nbh1srAXb" target="_blank" rel="noopener" style="text-decoration:none; display:block; width:100%;">Pay with card</a>
-          </div>
+            <input type="text" id="polar-order-id" placeholder="Order ID from your receipt email" style="width:100%; margin-top:8px; padding:8px 10px; background:var(--bg-2,#0d0d12); border:1px solid var(--border); border-radius:6px; color:var(--text); font-size:0.8rem; box-sizing:border-box;">
+            <button class="btn" id="polar-btn" onclick="unlockReportWithCard()" style="width:100%; margin-top:6px;">Unlock report</button>
+            <p style="font-size:0.72rem; color:var(--text-dim); margin:8px 0 0; line-height:1.4;">After paying, check your email for the Polar receipt and paste the Order ID here.</p>
+            <div class="error-msg" id="polar-msg" style="margin-top:8px;"></div>
           <div style="flex:1; min-width:160px;">
             <button class="btn" id="usdc-btn" onclick="payWithUSDC()" style="width:100%;">Pay with USDC</button>
             <p style="font-size:0.72rem; color:var(--text-dim); margin:8px 0 0; line-height:1.4;">Automatically connects to your wallet extension. USDC on Base network only — sending on any other network results in permanent loss of funds.</p>
@@ -726,6 +729,7 @@ function renderResults(data){
 }
 
 const REPORT_USDC_URL = "https://api.trustboost.dev/report-usdc";
+const REPORT_CARD_URL = "https://api.trustboost.dev/report";
 const USDC_BASE_CONTRACT = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 const WALLET_BASE = "0xCf1d31020A7915421f6d66B9835Dcb6f422337E7";
 const REPORT_PRICE_USDC = 49;
@@ -827,6 +831,66 @@ async function unlockReportWithUsdc(txHash, projectUrl, anonKey, appUrl){
         usdcMsg.style.display = "block";
         usdcBtn.disabled = false;
         usdcBtn.textContent = "Pay with USDC";
+      }
+    }
+  }
+}
+
+async function unlockReportWithCard(){
+  const orderId = document.getElementById("polar-order-id").value.trim();
+  const polarBtn = document.getElementById("polar-btn");
+  const polarMsg = document.getElementById("polar-msg");
+
+  if(!orderId){
+    polarMsg.textContent = "Paste your Order ID first — check your email for the Polar receipt.";
+    polarMsg.style.display = "block";
+    return;
+  }
+
+  const projectUrl = document.getElementById("project_url").value.trim();
+  const anonKey = document.getElementById("anon_key").value.trim();
+  const appUrl = document.getElementById("app_url").value.trim();
+
+  polarBtn.disabled = true;
+  polarMsg.style.display = "none";
+  const maxAttempts = 8;
+
+  for(let attempt = 1; attempt <= maxAttempts; attempt++){
+    try{
+      polarBtn.textContent = attempt === 1 ? "Checking payment..." : "Still checking...";
+      const resp = await fetch(REPORT_CARD_URL, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({order_id: orderId, project_url: projectUrl, anon_key: anonKey, app_url: appUrl || null})
+      });
+      const data = await resp.json();
+
+      if(resp.ok){
+        renderPaidReport(data, null);
+        polarBtn.disabled = false;
+        polarBtn.textContent = "Unlock report";
+        return;
+      }
+
+      if(resp.status === 402 && attempt < maxAttempts){
+        // El pago aún no llegó confirmado por el webhook — normal en
+        // los primeros segundos, reintentamos.
+        await new Promise(r => setTimeout(r, 3000));
+        continue;
+      }
+
+      polarMsg.textContent = data.message || "Could not verify this payment.";
+      polarMsg.style.display = "block";
+      polarBtn.disabled = false;
+      polarBtn.textContent = "Unlock report";
+      return;
+
+    }catch(e){
+      if(attempt === maxAttempts){
+        polarMsg.textContent = "We couldn't confirm this yet. If you already paid, contact support@trustboost.dev with your Order ID: " + orderId;
+        polarMsg.style.display = "block";
+        polarBtn.disabled = false;
+        polarBtn.textContent = "Unlock report";
       }
     }
   }
