@@ -2914,7 +2914,7 @@ async def scan_endpoint(req: ScanRequest, request: Request):
 
 # ── Paid detailed report (AI-generated) ───────────────────
 class CardReportRequest(BaseModel):
-    order_id: str
+    checkout_id: str
     project_url: str
     anon_key: str
     app_url: str | None = None
@@ -2934,9 +2934,9 @@ async def report_endpoint(req: CardReportRequest, request: Request):
         )
 
     # Verificación real del pago — antes de esto, no existía ninguna.
-    # El webhook de Polar es la única fuente de verdad: si el order_id
+    # El webhook de Polar es la única fuente de verdad: si el checkout_id
     # no llegó confirmado por ahí, o ya se usó antes, no se genera nada.
-    payment = await get_polar_payment(req.order_id)
+    payment = await get_polar_payment_by_checkout_id(req.checkout_id)
     if not payment or payment.get("status") != "paid":
         return JSONResponse(status_code=402, content={
             "status": "error",
@@ -2954,7 +2954,7 @@ async def report_endpoint(req: CardReportRequest, request: Request):
     from supabase_scanner import scan_project
     from report_generator import generate_report
 
-    await mark_polar_payment_used(req.order_id)
+    await mark_polar_payment_used(req.checkout_id)
 
     report = await scan_project(req.project_url, req.anon_key, app_url=req.app_url)
     await increment_scan(ip_hash)
@@ -2966,7 +2966,7 @@ async def report_endpoint(req: CardReportRequest, request: Request):
         overall_severity=report.overall_severity,
         overall_summary=ai_report.get("overall_summary", ""),
         findings=ai_report.get("findings", []),
-        payment_line=f"Paid via card, processed by Polar — order {req.order_id}",
+        payment_line=f"Paid via card, processed by Polar — checkout {req.checkout_id}",
     )
 
     return {
@@ -3012,32 +3012,32 @@ async def mark_hash_used(tx_hash: str):
 # webhook firmado por Polar) — y marcar cada pago como usado una sola
 # vez, para que no se pueda reutilizar el mismo order_id dos veces.
 
-async def store_polar_payment(order_id: str, status: str):
+async def store_polar_payment(order_id: str, checkout_id: str, status: str):
     async with httpx.AsyncClient() as client:
         r = await client.post(
             f"{SUPABASE_URL}/rest/v1/polar_payments",
             headers={**SUPABASE_HEADERS, "Prefer": "resolution=merge-duplicates"},
-            json={"order_id": order_id, "status": status}
+            json={"order_id": order_id, "checkout_id": checkout_id, "status": status}
         )
         if r.status_code not in (200, 201, 204):
             print(f"[store_polar_payment] FALLÓ: status={r.status_code} body={r.text[:300]}")
 
-async def get_polar_payment(order_id: str) -> dict | None:
+async def get_polar_payment_by_checkout_id(checkout_id: str) -> dict | None:
     async with httpx.AsyncClient() as client:
         r = await client.get(
             f"{SUPABASE_URL}/rest/v1/polar_payments",
             headers=SUPABASE_HEADERS,
-            params={"order_id": f"eq.{order_id}", "select": "*", "limit": "1"}
+            params={"checkout_id": f"eq.{checkout_id}", "select": "*", "limit": "1"}
         )
         if r.status_code == 200:
             rows = r.json()
             return rows[0] if rows else None
         return None
 
-async def mark_polar_payment_used(order_id: str):
+async def mark_polar_payment_used(checkout_id: str):
     async with httpx.AsyncClient() as client:
         await client.patch(
-            f"{SUPABASE_URL}/rest/v1/polar_payments?order_id=eq.{order_id}",
+            f"{SUPABASE_URL}/rest/v1/polar_payments?checkout_id=eq.{checkout_id}",
             headers=SUPABASE_HEADERS,
             json={"used": True}
         )
@@ -3080,9 +3080,11 @@ async def polar_webhook(request: Request):
 
     event_type = data.get("type", "")
     if event_type == "order.paid":
-        order_id = data.get("data", {}).get("id", "")
-        print(f"[polar_webhook] order.paid recibido: order_id={order_id}")
-        await store_polar_payment(order_id, "paid")
+        order_data = data.get("data", {})
+        order_id = order_data.get("id", "")
+        checkout_id = order_data.get("checkout_id", "")
+        print(f"[polar_webhook] order.paid recibido: order_id={order_id} checkout_id={checkout_id}")
+        await store_polar_payment(order_id, checkout_id, "paid")
     else:
         print(f"[polar_webhook] evento recibido pero ignorado (no es order.paid): {event_type}")
 
