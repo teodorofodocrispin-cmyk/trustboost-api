@@ -60,6 +60,8 @@ PAYMENT_WALLET        = os.getenv("PAYMENT_WALLET")
 POLAR_WEBHOOK_SECRET  = os.getenv("POLAR_WEBHOOK_SECRET", "")
 _pw_preview = f"{POLAR_WEBHOOK_SECRET[:6]}...{POLAR_WEBHOOK_SECRET[-6:]}" if len(POLAR_WEBHOOK_SECRET) >= 12 else "(demasiado corto)"
 print(f"[DIAG] POLAR_WEBHOOK_SECRET present: {bool(POLAR_WEBHOOK_SECRET)}, length: {len(POLAR_WEBHOOK_SECRET)}, preview: {_pw_preview}")
+POLAR_ACCESS_TOKEN    = os.getenv("POLAR_ACCESS_TOKEN", "")
+print(f"[DIAG] POLAR_ACCESS_TOKEN present: {bool(POLAR_ACCESS_TOKEN)}")
 TRIAL_QUOTA           = int(os.getenv("TRIAL_QUOTA", "50"))
 PAID_QUOTA            = int(os.getenv("PAID_QUOTA", "10000"))
 REQUIRED_PAYMENT_USDC = int(os.getenv("REQUIRED_PAYMENT_USDC", "149"))
@@ -2933,20 +2935,34 @@ async def report_endpoint(req: CardReportRequest, request: Request):
                       "message": f"Límite de {SCAN_LIMIT_PER_HOUR} escaneos/hora alcanzado. Vuelve en un rato."}
         )
 
-    # Verificación real del pago — antes de esto, no existía ninguna.
-    # El webhook de Polar es la única fuente de verdad: si el checkout_id
-    # no llegó confirmado por ahí, o ya se usó antes, no se genera nada.
-    payment = await get_polar_payment_by_checkout_id(req.checkout_id)
-    if not payment or payment.get("status") != "paid":
-        return JSONResponse(status_code=402, content={
-            "status": "error",
-            "message": "We couldn't confirm this payment yet. If you just paid, wait a few seconds and try again — Polar can take a moment to notify us."
-        })
-    if payment.get("used"):
+    # Verificación real del pago — dos capas, sin condición de carrera:
+    # 1) primero se le pregunta DIRECTO a la API de Polar si el checkout
+    #    ya se pagó (patrón oficial de Polar para páginas de retorno —
+    #    no depende de esperar a que un webhook haya llegado a tiempo).
+    # 2) si por algún motivo la API de Polar no responde, se usa como
+    #    respaldo lo que el webhook ya haya guardado en Supabase.
+    existing_payment = await get_polar_payment_by_checkout_id(req.checkout_id)
+    if existing_payment and existing_payment.get("used"):
         return JSONResponse(status_code=409, content={
             "status": "error",
             "message": "This payment was already used to generate a report."
         })
+
+    live_status = await check_polar_checkout_status(req.checkout_id)
+    is_paid = live_status == "succeeded"
+
+    if not is_paid:
+        # Respaldo: quizás el webhook ya lo confirmó aunque la consulta
+        # directa haya fallado por algún motivo puntual.
+        is_paid = bool(existing_payment and existing_payment.get("status") == "paid")
+
+    if not is_paid:
+        message = "We couldn't confirm this payment yet. If you just paid, wait a few seconds and try again — Polar can take a moment to notify us."
+        if live_status == "confirmed":
+            message = "Your payment is still processing — try again in a few seconds."
+        elif live_status == "failed":
+            message = "This payment failed or was not completed."
+        return JSONResponse(status_code=402, content={"status": "error", "message": message})
 
     if not req.project_url.startswith("https://") or ".supabase.co" not in req.project_url:
         return JSONResponse(status_code=400, content={"status": "error", "message": "URL de proyecto Supabase inválida"})
@@ -3036,11 +3052,42 @@ async def get_polar_payment_by_checkout_id(checkout_id: str) -> dict | None:
 
 async def mark_polar_payment_used(checkout_id: str):
     async with httpx.AsyncClient() as client:
-        await client.patch(
-            f"{SUPABASE_URL}/rest/v1/polar_payments?checkout_id=eq.{checkout_id}",
-            headers=SUPABASE_HEADERS,
-            json={"used": True}
+        # POST con "merge-duplicates" en vez de PATCH — si el webhook
+        # nunca llegó a guardar esta fila (posible ahora que la
+        # verificación principal ya no depende de él), esto la crea;
+        # si ya existía, la actualiza. checkout_id es único, así que
+        # nunca duplica.
+        r = await client.post(
+            f"{SUPABASE_URL}/rest/v1/polar_payments",
+            headers={**SUPABASE_HEADERS, "Prefer": "resolution=merge-duplicates"},
+            json={"checkout_id": checkout_id, "status": "paid", "used": True}
         )
+        if r.status_code not in (200, 201, 204):
+            print(f"[mark_polar_payment_used] FALLÓ: status={r.status_code} body={r.text[:300]}")
+
+# ── Verificación directa contra la API de Polar — patrón oficial ──────
+# En vez de depender solo del webhook (que puede tardar más que el
+# regreso del navegador — es una condición de carrera), la página de
+# retorno pregunta DIRECTO a Polar "¿este checkout ya se pagó?", tal
+# como lo documenta Polar en su propia guía oficial para páginas de
+# éxito. Elimina la espera por completo.
+
+async def check_polar_checkout_status(checkout_id: str) -> str | None:
+    """Consulta el estado real de un checkout directo en la API de
+    Polar. Devuelve 'succeeded', 'confirmed', 'failed', 'open', u otro
+    valor de estado — o None si no se pudo consultar."""
+    if not POLAR_ACCESS_TOKEN:
+        return None
+    async with httpx.AsyncClient() as client:
+        r = await client.get(
+            f"https://api.polar.sh/v1/checkouts/{checkout_id}",
+            headers={"Authorization": f"Bearer {POLAR_ACCESS_TOKEN}"},
+            timeout=10,
+        )
+        if r.status_code == 200:
+            return r.json().get("status")
+        print(f"[check_polar_checkout_status] status={r.status_code} body={r.text[:200]}")
+        return None
 
 
 @app.post("/webhooks/polar", include_in_schema=False)
