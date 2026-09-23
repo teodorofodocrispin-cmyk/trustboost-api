@@ -57,6 +57,7 @@ HELIUS_API_KEY        = os.getenv("HELIUS_API_KEY")
 SUPABASE_URL          = os.getenv("SUPABASE_URL")
 SUPABASE_KEY          = os.getenv("SUPABASE_KEY")
 PAYMENT_WALLET        = os.getenv("PAYMENT_WALLET")
+POLAR_WEBHOOK_SECRET  = os.getenv("POLAR_WEBHOOK_SECRET", "")
 TRIAL_QUOTA           = int(os.getenv("TRIAL_QUOTA", "50"))
 PAID_QUOTA            = int(os.getenv("PAID_QUOTA", "10000"))
 REQUIRED_PAYMENT_USDC = int(os.getenv("REQUIRED_PAYMENT_USDC", "149"))
@@ -2910,8 +2911,14 @@ async def scan_endpoint(req: ScanRequest, request: Request):
     }
 
 # ── Paid detailed report (AI-generated) ───────────────────
+class CardReportRequest(BaseModel):
+    order_id: str
+    project_url: str
+    anon_key: str
+    app_url: str | None = None
+
 @app.post("/report")
-async def report_endpoint(req: ScanRequest, request: Request):
+async def report_endpoint(req: CardReportRequest, request: Request):
     import hashlib
     raw_ip = request.client.host if request.client else "unknown"
     ip_hash = hashlib.sha256(raw_ip.encode()).hexdigest()[:16]
@@ -2924,11 +2931,28 @@ async def report_endpoint(req: ScanRequest, request: Request):
                       "message": f"Límite de {SCAN_LIMIT_PER_HOUR} escaneos/hora alcanzado. Vuelve en un rato."}
         )
 
+    # Verificación real del pago — antes de esto, no existía ninguna.
+    # El webhook de Polar es la única fuente de verdad: si el order_id
+    # no llegó confirmado por ahí, o ya se usó antes, no se genera nada.
+    payment = await get_polar_payment(req.order_id)
+    if not payment or payment.get("status") != "paid":
+        return JSONResponse(status_code=402, content={
+            "status": "error",
+            "message": "We couldn't confirm this payment yet. If you just paid, wait a few seconds and try again — Polar can take a moment to notify us."
+        })
+    if payment.get("used"):
+        return JSONResponse(status_code=409, content={
+            "status": "error",
+            "message": "This payment was already used to generate a report."
+        })
+
     if not req.project_url.startswith("https://") or ".supabase.co" not in req.project_url:
         return JSONResponse(status_code=400, content={"status": "error", "message": "URL de proyecto Supabase inválida"})
 
     from supabase_scanner import scan_project
     from report_generator import generate_report
+
+    await mark_polar_payment_used(req.order_id)
 
     report = await scan_project(req.project_url, req.anon_key, app_url=req.app_url)
     await increment_scan(ip_hash)
@@ -2940,7 +2964,7 @@ async def report_endpoint(req: ScanRequest, request: Request):
         overall_severity=report.overall_severity,
         overall_summary=ai_report.get("overall_summary", ""),
         findings=ai_report.get("findings", []),
-        payment_line="Paid via card, processed by Polar",
+        payment_line=f"Paid via card, processed by Polar — order {req.order_id}",
     )
 
     return {
@@ -2977,6 +3001,69 @@ async def mark_hash_used(tx_hash: str):
             headers=SUPABASE_HEADERS,
             json={"tx_hash": tx_hash}
         )
+
+# ── Pagos con tarjeta vía Polar — webhook + verificación ──────────
+# Antes de esto, /report no verificaba ningún pago — cualquiera podía
+# llamarlo directo y recibir el reporte gratis. Se corrige con el
+# mismo principio que ya usa USDC: nunca confiar en lo que dice el
+# navegador, solo en lo que confirma la fuente de verdad (aquí, un
+# webhook firmado por Polar) — y marcar cada pago como usado una sola
+# vez, para que no se pueda reutilizar el mismo order_id dos veces.
+
+async def store_polar_payment(order_id: str, status: str):
+    async with httpx.AsyncClient() as client:
+        await client.post(
+            f"{SUPABASE_URL}/rest/v1/polar_payments",
+            headers={**SUPABASE_HEADERS, "Prefer": "resolution=merge-duplicates"},
+            json={"order_id": order_id, "status": status}
+        )
+
+async def get_polar_payment(order_id: str) -> dict | None:
+    async with httpx.AsyncClient() as client:
+        r = await client.get(
+            f"{SUPABASE_URL}/rest/v1/polar_payments",
+            headers=SUPABASE_HEADERS,
+            params={"order_id": f"eq.{order_id}", "select": "*", "limit": "1"}
+        )
+        if r.status_code == 200:
+            rows = r.json()
+            return rows[0] if rows else None
+        return None
+
+async def mark_polar_payment_used(order_id: str):
+    async with httpx.AsyncClient() as client:
+        await client.patch(
+            f"{SUPABASE_URL}/rest/v1/polar_payments?order_id=eq.{order_id}",
+            headers=SUPABASE_HEADERS,
+            json={"used": True}
+        )
+
+
+@app.post("/webhooks/polar", include_in_schema=False)
+async def polar_webhook(request: Request):
+    """Recibe la confirmación de pago de Polar — firmada, así que
+    nadie puede falsificarla. Esta es la única fuente de verdad de si
+    un pago con tarjeta realmente ocurrió; el navegador nunca decide
+    esto por sí solo."""
+    from polar_sdk.webhooks import validate_event, WebhookVerificationError
+
+    body = await request.body()
+    try:
+        event = validate_event(
+            body=body,
+            headers=dict(request.headers),
+            secret=POLAR_WEBHOOK_SECRET,
+        )
+    except WebhookVerificationError:
+        return JSONResponse(status_code=403, content={"error": "invalid signature"})
+    except Exception as e:
+        print(f"[polar_webhook] error de verificación: {type(e).__name__}: {str(e)[:200]}")
+        return JSONResponse(status_code=400, content={"error": "malformed webhook"})
+
+    if event.type == "order.paid":
+        await store_polar_payment(event.data.id, "paid")
+
+    return JSONResponse(content={"received": True})
 
 # ── Persistencia de reportes pagados ───────────────────────
 # Antes, el reporte solo existía en la memoria del navegador — si la
