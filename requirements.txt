@@ -12,4 +12,4 @@ base58==2.1.1
 
 xhtml2pdf==0.2.20
 
-polar-sdk
+polar-sdk==0.32.0
