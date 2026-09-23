@@ -3048,8 +3048,17 @@ async def polar_webhook(request: Request):
     """Recibe la confirmación de pago de Polar — firmada, así que
     nadie puede falsificarla. Esta es la única fuente de verdad de si
     un pago con tarjeta realmente ocurrió; el navegador nunca decide
-    esto por sí solo."""
-    from polar_sdk.webhooks import validate_event, WebhookVerificationError
+    esto por sí solo.
+
+    NOTA TÉCNICA: se usa `standardwebhooks.Webhook` directamente, en vez
+    de `polar_sdk.webhooks.validate_event`. Esa función de polar-sdk
+    codifica el secreto en base64 ANTES de dárselo a Webhook(), pero
+    Webhook() ya espera el secreto con el prefijo "whsec_" tal cual lo
+    entrega Polar — al pasar por polar-sdk primero, el prefijo termina
+    metido dentro de la llave criptográfica en vez de quitarse, y la
+    firma nunca coincide. Usando Webhook() directo, con el secreto sin
+    tocar, el prefijo se detecta y se quita en el lugar correcto."""
+    from standardwebhooks.webhooks import Webhook, WebhookVerificationError
 
     body = await request.body()
 
@@ -3060,11 +3069,8 @@ async def polar_webhook(request: Request):
     print(f"[polar_webhook] headers recibidos: webhook-id={has_id} webhook-timestamp={has_ts} webhook-signature={has_sig} | todos los headers: {list(incoming_headers.keys())}")
 
     try:
-        event = validate_event(
-            body=body,
-            headers=dict(request.headers),
-            secret=POLAR_WEBHOOK_SECRET,
-        )
+        webhook = Webhook(POLAR_WEBHOOK_SECRET)
+        data = webhook.verify(body, dict(request.headers))
     except WebhookVerificationError as e:
         print(f"[polar_webhook] WebhookVerificationError: {str(e)}")
         return JSONResponse(status_code=403, content={"error": "invalid signature", "detail": str(e)})
@@ -3072,11 +3078,13 @@ async def polar_webhook(request: Request):
         print(f"[polar_webhook] error de verificación: {type(e).__name__}: {str(e)[:200]}")
         return JSONResponse(status_code=400, content={"error": "malformed webhook"})
 
-    if event.type == "order.paid":
-        print(f"[polar_webhook] order.paid recibido: order_id={event.data.id}")
-        await store_polar_payment(event.data.id, "paid")
+    event_type = data.get("type", "")
+    if event_type == "order.paid":
+        order_id = data.get("data", {}).get("id", "")
+        print(f"[polar_webhook] order.paid recibido: order_id={order_id}")
+        await store_polar_payment(order_id, "paid")
     else:
-        print(f"[polar_webhook] evento recibido pero ignorado (no es order.paid): {event.type}")
+        print(f"[polar_webhook] evento recibido pero ignorado (no es order.paid): {event_type}")
 
     return JSONResponse(content={"received": True})
 
