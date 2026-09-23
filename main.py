@@ -107,6 +107,9 @@ app.include_router(demo_router)
 from mcp_router import router as mcp_router
 app.include_router(mcp_router)
 
+from mcp_security_router import router as mcp_security_router
+app.include_router(mcp_security_router)
+
 @app.get("/llms.txt")
 async def llms_txt():
     """Standard llms.txt for LLM and agent discovery."""
