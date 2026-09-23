@@ -892,6 +892,74 @@ primera venta real confirmada).
 
 ---
 
+## 21. Corrección de fondo del RLS propio (service_role dedicada) — verificada end-to-end (22-23 de septiembre de 2026)
+
+Un análisis externo de `PRODUCT_OVERVIEW.md` señaló, con razón, que
+desactivar RLS por completo en `badge_scans` y `paid_reports` (sección
+18) era una deuda técnica reputacional seria: un producto que vende
+"detectamos si tu Supabase filtra datos" con sus propias tablas sin RLS
+es una contradicción que la comunidad técnica castigaría sin piedad si
+se descubriera.
+
+**El detalle técnico que ni el análisis externo ni la sección 18
+capturaron bien:** en Supabase, la `service_role key` siempre salta
+RLS por completo, sin importar las políticas. El hecho de que el bug
+original (`new row violates row-level security policy`) haya ocurrido
+demuestra que el backend no estaba usando esa key para esas dos tablas
+— estaba usando una de nivel más bajo. Por eso "activar RLS con una
+política para `service_role`" (como sugería el análisis externo)
+tampoco habría funcionado sin este cambio.
+
+**La solución implementada, quirúrgica y de bajo riesgo:** en vez de
+cambiar la `SUPABASE_KEY` global (usada en las ~4,000 líneas del
+archivo), se agregó una key **separada y dedicada**
+(`SUPABASE_SERVICE_ROLE_KEY`, nueva variable de entorno en Render) que
+solo usan las 4 funciones de `badge_scans` y `paid_reports`
+(`register_clean_scan`, `get_badge_scan`, `save_paid_report`,
+`get_paid_report`). El resto del archivo sigue intacto, sin ningún
+riesgo de romper algo que ya funcionaba. Se agregó además un respaldo
+automático (`os.getenv("SUPABASE_SERVICE_ROLE_KEY", SUPABASE_KEY)`)
+para que el código no fallara si la variable nueva tardaba en
+configurarse.
+
+Con la key nueva en su lugar, se reactivó RLS de verdad en ambas
+tablas:
+
+```sql
+alter table badge_scans enable row level security;
+alter table paid_reports enable row level security;
+```
+
+Sin necesidad de ninguna política — `service_role` las salta
+automáticamente, y ahora sí quedan protegidas frente a cualquier otro
+acceso.
+
+**Verificado end-to-end con un caso real:** se recreó una tabla de
+prueba desechable (`waitlist`, sin RLS a propósito, con correos falsos)
+en el proyecto de TrustBoost, se escaneó, y se pagó un reporte de
+$0.10 sobre ese hallazgo real. El reporte generado mostró correctamente
+la severidad PRIVATE, el mapeo a GDPR Art. 32, y un SQL de arreglo que
+no solo activa RLS sino que agrega una política real con una nota
+honesta ("considera ajustar esta política según tus reglas de acceso
+reales") — el mismo matiz de honestidad que ya se había decidido
+mantener frente a la crítica de Cenk Kurtoğlu. El botón de PDF, el
+link permanente, y el link de rescate en el pie del PDF funcionaron
+correctamente con la nueva configuración de `service_role`.
+
+**Nota operativa:** durante esta prueba se creó y luego se borró
+también, por error de nombre, una tabla `test_leak_delete_me` — el
+escáner no la detectó porque solo prueba una lista fija de ~40 nombres
+comunes de tabla (`COMMON_TABLE_NAMES` en `supabase_scanner.py`), ya
+que Supabase bloqueó la forma de listar tablas reales con la anon key.
+Para pruebas futuras, usar siempre uno de esos 40 nombres (`waitlist`,
+`users`, `orders`, etc.), nunca un nombre inventado.
+
+El precio de prueba (bajado a $0.10 para esta verificación) se devolvió
+a $49 en los tres archivos (`main.py`, `scan-landing.html`,
+`seo-template.html`) una vez confirmado que todo funcionaba.
+
+---
+
 ## Cómo actualizar este documento
 
 Cuando se tome una decisión de negocio o de arquitectura (no un simple
