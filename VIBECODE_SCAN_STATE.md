@@ -1035,6 +1035,109 @@ PeerPush.
 
 ---
 
+## 23. Verificación real de pagos con tarjeta — construida, y la saga completa de bugs para llegar ahí (23 de septiembre de 2026)
+
+**El problema de fondo que originó todo esto:** se descubrió que `/report`
+(el reporte pagado con tarjeta) **nunca verificaba ningún pago** — el
+botón "Pay with card" solo mandaba a la persona a pagar en Polar, sin
+ninguna conexión de vuelta al backend. Cualquiera podía llamar al
+endpoint directo y recibir el reporte gratis. Esto llevó a construir,
+por primera vez, verificación real de pago con tarjeta — y en el
+camino aparecieron varios bugs reales encadenados, cada uno diagnosticado
+con evidencia concreta, no con suposiciones.
+
+### Intento 1: webhook + Order ID pegado a mano — descartado
+
+Primer diseño: un webhook de Polar (`order.paid`) guarda el pago en una
+tabla nueva (`polar_payments`), y la persona pega el Order ID de su
+correo de recibo en el sitio para desbloquear el reporte — mismo patrón
+que ya usaba USDC con el tx_hash.
+
+**Bug 1 — el mismo de siempre:** la tabla se creó con RLS activado sin
+política, igual que `badge_scans` y `paid_reports` antes. Se corrigió
+por primera vez creando una **service_role key dedicada**
+(`SUPABASE_SERVICE_ROLE_KEY`), en vez de simplemente desactivar RLS de
+nuevo — la lección de la sección 21 aplicada de inmediato.
+
+**Bug 2 — el prefijo `whsec_` roto:** con RLS ya resuelto, el webhook
+seguía devolviendo 403 en cada intento, sin importar cuántas veces se
+regenerara el secreto. La causa real, encontrada leyendo el código
+fuente de las librerías: `polar_sdk.webhooks.validate_event()`
+codifica el secreto completo en base64 (incluyendo el prefijo
+`whsec_`) antes de dárselo a `Webhook()`, que solo sabe quitar ese
+prefijo si lo recibe intacto, sin codificar. El prefijo terminaba
+metido dentro de la llave criptográfica real, y la firma nunca podía
+coincidir. Se corrigió usando `standardwebhooks.Webhook` directamente,
+pasándole el secreto sin ningún envoltorio de por medio — verificado
+matemáticamente con un ciclo de firmar/verificar antes de confiar en
+el arreglo.
+
+**Descubierto en el camino, feedback real de Iv:** el Order ID que se
+le pedía a la persona pegar **no aparece en el correo de recibo real de
+Polar** — solo se podía obtener mirando los logs del servidor, algo
+que ningún cliente real puede hacer. Además, el botón de pago abría
+una pestaña nueva con la página de inicio en blanco, sin volver a
+donde hacía falta. Ambos problemas juntos habrían hecho el cobro real
+inutilizable para cualquier cliente.
+
+### Intento 2: redirección automática con checkout_id — mejor, pero con una condición de carrera
+
+Se rediseñó todo el flujo: Polar redirige automáticamente de vuelta
+con `?checkout_id={CHECKOUT_ID}` en la URL (configurado en el "Success
+URL" del Checkout Link de Polar), y el navegador guarda
+`project_url`/`anon_key` en `localStorage` justo antes de salir a
+pagar, recuperándolos solos al volver — cero copiar y pegar. El
+`checkout_id` viene incluido dentro del propio objeto `Order` que trae
+el webhook (`order.checkout_id`), permitiendo guardar y buscar por
+ambos IDs.
+
+**Bug 3 — condición de carrera:** aun con todo esto, el pago seguía sin
+confirmarse a veces — el navegador regresaba de Polar más rápido de lo
+que el webhook llegaba a guardarse. Se resolvió encontrando **el patrón
+oficial documentado por la propia Polar** (`docs.polar.sh/guides/node`):
+en vez de esperar al webhook, la página de retorno debe **preguntarle
+directamente a la API de Polar** (`GET /v1/checkouts/{id}`) si el
+checkout ya se pagó, en el momento — sin esperas. Se implementó como
+verificación principal, dejando el webhook como respaldo. Requiere un
+`POLAR_ACCESS_TOKEN` nuevo, con el alcance mínimo posible
+(`checkouts:read` únicamente).
+
+**Bug 4 — restricción de base de datos:** al dejar de depender
+exclusivamente del webhook, `mark_polar_payment_used()` a veces
+necesitaba crear una fila sin `order_id` (porque ya no siempre lo
+teníamos) — pero esa columna era la llave primaria de la tabla, y
+Postgres no permite que una llave primaria sea nula. Se corrigió
+reemplazando la llave primaria por un `id` autogenerado, y liberando
+`order_id` para que pueda quedar vacío.
+
+**Bug 5 — el más sutil, encontrado al final:** con todo lo anterior ya
+funcionando por dentro (confirmado en los logs: `status=succeeded`,
+`/report` respondiendo `200 OK`), la persona seguía sin ver nada en
+pantalla al volver. La causa: el contenedor donde se escribe el
+reporte (`#paid-report`) vive dentro de una sección (`#results`) que
+el CSS mantiene oculta (`display:none`) hasta que se le agrega la
+clase `active` — algo que normalmente solo pasa al terminar un escaneo
+normal. Al volver de un pago nunca corre ningún escaneo, así que esa
+clase nunca se agregaba, y el contenido quedaba escrito correctamente
+pero invisible. Se corrigió agregando esa misma clase también en el
+flujo de retorno de pago.
+
+### Verificación final
+
+Confirmado de punta a punta con una compra real: el reporte aparece en
+pantalla automáticamente al volver de Polar, sin pegar nada a mano, y
+el PDF se descarga correctamente. Precio de prueba (`Free`, $0) devuelto
+a $49 en Polar al terminar.
+
+**Lección general de toda esta sección:** cinco bugs reales, cada uno
+distinto, cada uno diagnosticado con evidencia directa (logs, código
+fuente de librerías, documentación oficial) en vez de conjeturas — el
+mismo método que ya venía funcionando bien en sesiones anteriores,
+aplicado con más disciplina todavía dada la frustración acumulada de
+un día entero en esto.
+
+---
+
 ## Cómo actualizar este documento
 
 Cuando se tome una decisión de negocio o de arquitectura (no un simple
