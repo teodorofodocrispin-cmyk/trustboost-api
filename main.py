@@ -3032,7 +3032,7 @@ async def store_polar_payment(order_id: str, checkout_id: str, status: str):
     async with httpx.AsyncClient() as client:
         r = await client.post(
             f"{SUPABASE_URL}/rest/v1/polar_payments",
-            headers={**SUPABASE_HEADERS, "Prefer": "resolution=merge-duplicates"},
+            headers={**SUPABASE_SERVICE_HEADERS, "Prefer": "resolution=merge-duplicates"},
             json={"order_id": order_id, "checkout_id": checkout_id, "status": status}
         )
         if r.status_code not in (200, 201, 204):
@@ -3042,7 +3042,7 @@ async def get_polar_payment_by_checkout_id(checkout_id: str) -> dict | None:
     async with httpx.AsyncClient() as client:
         r = await client.get(
             f"{SUPABASE_URL}/rest/v1/polar_payments",
-            headers=SUPABASE_HEADERS,
+            headers=SUPABASE_SERVICE_HEADERS,
             params={"checkout_id": f"eq.{checkout_id}", "select": "*", "limit": "1"}
         )
         if r.status_code == 200:
@@ -3059,7 +3059,7 @@ async def mark_polar_payment_used(checkout_id: str):
         # nunca duplica.
         r = await client.post(
             f"{SUPABASE_URL}/rest/v1/polar_payments",
-            headers={**SUPABASE_HEADERS, "Prefer": "resolution=merge-duplicates"},
+            headers={**SUPABASE_SERVICE_HEADERS, "Prefer": "resolution=merge-duplicates"},
             json={"checkout_id": checkout_id, "status": "paid", "used": True}
         )
         if r.status_code not in (200, 201, 204):
