@@ -1,5 +1,6 @@
 import os
 import json
+import base64
 from datetime import datetime, timezone
 import hashlib
 import base58
@@ -649,11 +650,40 @@ async def mcp_server_card():
         "features": ["context_aware_sanitization", "privacy_budget", "trustboost_score", "proof_of_sanitization_solana"]
     }
 
+# Las tablas (audit_log, trial_requests, used_tx, paid_requests, budget_*) tienen RLS
+# con politicas "service_role_only". Con la clave anon, SELECT devuelve [] y los INSERT
+# fallan en silencio ("violates row-level security policy"): el TRIAL no se contaba, el
+# replay de tx_hash no se registraba y no habia audit trail. Se prefiere la clave
+# service_role (SUPABASE_SERVICE_ROLE_KEY) y se cae a SUPABASE_KEY si no esta definida.
+SUPABASE_DB_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or SUPABASE_KEY
+
+
+def _jwt_role(token: str | None) -> str | None:
+    """Rol ('anon' / 'service_role') que declara un JWT de Supabase; None si no es legible."""
+    try:
+        payload = (token or "").split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        return json.loads(base64.urlsafe_b64decode(payload)).get("role")
+    except Exception:
+        return None
+
+
+_db_role = _jwt_role(SUPABASE_DB_KEY)
+if SUPABASE_DB_KEY and _db_role and _db_role != "service_role":
+    print(f"[WARN] Supabase key role is '{_db_role}', not 'service_role': RLS will block "
+          "writes to audit_log/trial_requests/used_tx. Set SUPABASE_SERVICE_ROLE_KEY.")
+
 SUPABASE_HEADERS = {
-    "apikey": SUPABASE_KEY,
-    "Authorization": f"Bearer {SUPABASE_KEY}",
+    "apikey": SUPABASE_DB_KEY,
+    "Authorization": f"Bearer {SUPABASE_DB_KEY}",
     "Content-Type": "application/json"
 }
+
+
+def _warn_write_failure(table: str, r) -> None:
+    """Hace visible en los logs un INSERT rechazado por Supabase (antes fallaba en silencio)."""
+    if r.status_code not in (200, 201, 204):
+        print(f"[Supabase] write to {table} failed: HTTP {r.status_code} {r.text[:200]}")
 
 # ── Fase 4: Proof of Sanitization on Solana ───────────────
 SOLANA_SERVICE_KEY = os.getenv("SOLANA_SERVICE_PRIVATE_KEY")
@@ -1215,11 +1245,12 @@ async def get_trial_count(wallet: str) -> int:
 
 async def increment_trial(wallet: str):
     async with httpx.AsyncClient() as client:
-        await client.post(
+        r = await client.post(
             f"{SUPABASE_URL}/rest/v1/trial_requests",
             headers=SUPABASE_HEADERS,
             json={"wallet_address": wallet}
         )
+        _warn_write_failure("trial_requests", r)
 
 # ── PAID: verificar y contar por tx_hash ───────────────────
 
@@ -1238,11 +1269,12 @@ async def check_replay(tx_hash: str) -> bool:
 async def register_tx_hash(tx_hash: str):
     """Registra el tx_hash en used_tx la primera vez."""
     async with httpx.AsyncClient() as client:
-        await client.post(
+        r = await client.post(
             f"{SUPABASE_URL}/rest/v1/used_tx",
             headers={**SUPABASE_HEADERS, "Prefer": "return=minimal"},
             json={"tx_hash": tx_hash}
         )
+        _warn_write_failure("used_tx", r)
 
 async def get_paid_count(tx_hash: str) -> int:
     """Cuenta cuántas sanitizaciones se han usado de este tx_hash."""
@@ -1259,11 +1291,12 @@ async def get_paid_count(tx_hash: str) -> int:
 async def increment_paid(tx_hash: str):
     """Registra una sanitización usada contra este tx_hash."""
     async with httpx.AsyncClient() as client:
-        await client.post(
+        r = await client.post(
             f"{SUPABASE_URL}/rest/v1/paid_requests",
             headers=SUPABASE_HEADERS,
             json={"tx_hash": tx_hash}
         )
+        _warn_write_failure("paid_requests", r)
 
 # ── HELIUS: verificar pago en Solana ───────────────────────
 
@@ -1540,6 +1573,7 @@ async def log_audit(tx_hash, length, sanitized, score, category, wallet, license
             rows = r.json()
             if rows and isinstance(rows, list):
                 return rows[0].get("id")
+        _warn_write_failure("audit_log", r)
         return None
 
 # ── Health check ───────────────────────────────────────────

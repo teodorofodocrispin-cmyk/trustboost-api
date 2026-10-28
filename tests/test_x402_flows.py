@@ -212,3 +212,41 @@ def test_anchor_builds_and_sends_signed_tx(monkeypatch):
     sig = asyncio.run(main.anchor_proof_on_solana("wallet", 0.6, "PRIVATE", 42))
     assert sig == "SIG123"
     assert sent["tx"]
+
+
+# ── Supabase key: RLS tables need service_role, not anon ─────────────────────
+def _fake_jwt(role):
+    enc = lambda d: base64.urlsafe_b64encode(json.dumps(d).encode()).decode().rstrip("=")
+    return f"{enc({'alg': 'HS256'})}.{enc({'role': role})}.sig"
+
+
+def test_jwt_role_reads_supabase_keys():
+    assert main._jwt_role(_fake_jwt("anon")) == "anon"
+    assert main._jwt_role(_fake_jwt("service_role")) == "service_role"
+    assert main._jwt_role("not-a-jwt") is None
+    assert main._jwt_role(None) is None
+
+
+def test_service_role_key_is_preferred(monkeypatch):
+    import importlib
+
+    monkeypatch.setenv("SUPABASE_KEY", _fake_jwt("anon"))
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", _fake_jwt("service_role"))
+    m = importlib.reload(main)
+    try:
+        assert m._jwt_role(m.SUPABASE_HEADERS["apikey"]) == "service_role"
+        monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY")
+        m = importlib.reload(main)
+        assert m._jwt_role(m.SUPABASE_HEADERS["apikey"]) == "anon"  # fallback keeps old behaviour
+    finally:
+        monkeypatch.undo()
+        importlib.reload(main)
+
+
+def test_failed_write_is_logged(capsys):
+    class R:
+        status_code = 401
+        text = 'new row violates row-level security policy for table "audit_log"'
+
+    main._warn_write_failure("audit_log", R())
+    assert "audit_log" in capsys.readouterr().out

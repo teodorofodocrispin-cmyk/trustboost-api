@@ -1056,3 +1056,14 @@ a la firma `(text, context)`): 49 passed offline. `tests/test_live.py` requiere 
 - README afirma F1 1.000 sobre 34 casos: matizar (muestra pequeña propia). Falta archivo LICENSE.
 - El schema Bazaar del 402 no declara el body POST (`text`, `tx_hash`): la doc de x402 no define cómo; revisar el SDK antes de añadirlo.
 - Responder a Usetested con el body esperado (`{"text": "...", "context": "general"}` + PAYMENT-SIGNATURE) para el re-test gratuito, después de desplegar.
+
+### Hallazgo 2026-10-28 (tarde) — RLS bloqueaba todas las escrituras (causa de `audit_id: null`)
+Consulta de solo lectura a Supabase (proyecto TrustBoost 2.0): `audit_log` solo tiene 2 filas (última 2026-05-22),
+`trial_requests` 2 filas, `used_tx` 0. Los logs de Postgres muestran `new row violates row-level security policy`
+para `audit_log` y `trial_requests` a la hora exacta de la prueba TRIAL. Las políticas son `service_role_only`, pero
+`SUPABASE_KEY` en Render es una clave que no es service_role (anon). Consecuencias: TRIAL sin tope real (el contador
+nunca sube: 49/50 siempre), `used_tx`/`paid_requests` sin registrar (cuota 10k y anti-replay del bundle sin efecto),
+sin audit trail ni anclaje.
+Fix en código: `SUPABASE_HEADERS` usa `SUPABASE_SERVICE_ROLE_KEY` si existe (fallback a `SUPABASE_KEY`); aviso al arrancar
+si el rol del JWT no es service_role; las escrituras rechazadas ahora se imprimen en logs (`[Supabase] write to ... failed`).
+**Acción manual requerida en Render**: definir `SUPABASE_SERVICE_ROLE_KEY` (Supabase → Settings → API → service_role) y redeploy.
