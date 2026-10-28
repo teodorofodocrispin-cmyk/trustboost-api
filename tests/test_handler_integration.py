@@ -45,7 +45,7 @@ def client(monkeypatch):
 
 
 def _stub_gpt(monkeypatch, response: dict):
-    async def fake_gpt_sanitize(text):
+    async def fake_gpt_sanitize(text, *args, **kwargs):
         return response
     monkeypatch.setattr(main, "gpt_sanitize", fake_gpt_sanitize)
 

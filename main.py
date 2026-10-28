@@ -93,19 +93,32 @@ app.add_middleware(
 )
 
 # ── x402 discovery middleware (aditivo) ──────────────────────────────────────
-# Intercepta las rutas de pago y devuelve 402 + PAYMENT-REQUIRED a requests sin
-# header de pago, ANTES de que FastAPI valide el body Pydantic (que daria 422).
-# Esto hace que sondeos de discovery (GET o POST sin body, como agentic.market /
-# x402-list) vean un 402 valido en vez de 422/405. Si el request trae header de
-# pago, se deja pasar al handler, que ya verifica y responde 402 si el pago falla.
+# Responde 402 + PAYMENT-REQUIRED a los SONDEOS de discovery (GET/HEAD, o POST
+# sin body, como agentic.market / x402-list / Usetested) ANTES de que FastAPI
+# valide el body Pydantic (que daria 405/422).
+# IMPORTANTE: un POST que SI trae body (JSON con text, tx_hash=TRIAL, tx_hash
+# prepago, etc.) o un header de pago NUNCA se intercepta aqui: pasa al handler,
+# que decide (TRIAL / prepago / per-call / 402). Interceptar todo POST sin header
+# de pago bloqueaba TRIAL y bundle prepago (regresion del 2026-07-16, commit 47fb9c0).
 _PAYMENT_HEADERS = {"x-payment", "payment-signature", "x402-payment", "authorization"}
-_X402_PAID_ROUTES = {"/sanitize", "/redact", "/detect", "/sanitize/quick"}
+_X402_PAID_ROUTES = {"/sanitize", "/redact", "/detect", "/sanitize/quick", "/trustboost-pii-sanitizer"}
+
+
+def _is_discovery_probe(request: Request) -> bool:
+    """True si el request es un sondeo sin credenciales: GET/HEAD, o POST sin body."""
+    if request.method in ("GET", "HEAD"):
+        return True
+    if request.method == "POST":
+        if "transfer-encoding" in request.headers:  # body chunked: dejar pasar al handler
+            return False
+        return request.headers.get("content-length", "0").strip() in ("", "0")
+    return False
 
 
 @app.middleware("http")
 async def x402_discovery_middleware(request: Request, call_next):
     path = request.url.path.rstrip("/")
-    if path in _X402_PAID_ROUTES:
+    if path in _X402_PAID_ROUTES and _is_discovery_probe(request):
         has_payment = any(h in request.headers for h in _PAYMENT_HEADERS)
         if not has_payment:
             price = PRICE_SANITIZE_PERCALL if path != "/sanitize" else "0.01"
@@ -662,6 +675,7 @@ async def anchor_proof_on_solana(wallet: str, score: float, category: str, text_
         from solders.message import Message
         from solders.instruction import Instruction, AccountMeta
         from solders.pubkey import Pubkey
+        from solders.hash import Hash
         import httpx
 
         # Build the proof hash
@@ -690,7 +704,7 @@ async def anchor_proof_on_solana(wallet: str, score: float, category: str, text_
                 timeout=10
             )
             bh_data = bh_response.json()
-            recent_blockhash = bh_data["result"]["value"]["blockhash"]
+            recent_blockhash = Hash.from_string(bh_data["result"]["value"]["blockhash"])
 
             # Build and sign transaction
             msg = Message.new_with_blockhash([memo_ix], keypair.pubkey(), recent_blockhash)
@@ -722,21 +736,29 @@ VALID_CONTEXTS = {"general", "legal", "code", "financial", "medical"}
 # idéntico a v2.3). Esto mantiene backward-compatibility total.
 
 async def get_agent_budget(operator_id: str) -> dict | None:
-    """Retorna el budget activo del operador, o None si no existe."""
-    async with httpx.AsyncClient() as client:
-        r = await client.get(
-            f"{SUPABASE_URL}/rest/v1/agent_budgets",
-            headers=SUPABASE_HEADERS,
-            params={
-                "operator_id": f"eq.{operator_id}",
-                "is_active": "eq.true",
-                "select": "operator_id,daily_limit,context_limit",
-                "limit": "1"
-            }
-        )
-        if r.status_code == 200:
-            rows = r.json()
-            return rows[0] if rows else None
+    """Retorna el budget activo del operador, o None si no existe.
+
+    El budget es una feature opcional: si Supabase no responde se trata como
+    "sin budget" (fail-open) para que una caida de esa tabla no tumbe /sanitize.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            r = await client.get(
+                f"{SUPABASE_URL}/rest/v1/agent_budgets",
+                headers=SUPABASE_HEADERS,
+                params={
+                    "operator_id": f"eq.{operator_id}",
+                    "is_active": "eq.true",
+                    "select": "operator_id,daily_limit,context_limit",
+                    "limit": "1"
+                }
+            )
+            if r.status_code == 200:
+                rows = r.json()
+                return rows[0] if rows else None
+            return None
+    except Exception as e:
+        print(f"[Budget] get_agent_budget failed, treating as no budget: {e}")
         return None
 
 
@@ -2239,9 +2261,14 @@ async def sanitize(
         )
     percall_payer = None
     if x_payment and (not req.text or not req.text.strip()):
-        # Payment header present but no text yet — this is a probe/discovery call,
-        # not an actual payment attempt. Fall through to normal 402 flow below.
-        pass
+        # Payment header present but no text: the caller is trying to pay but sent
+        # nothing to sanitize. A 402 here would make the agent pay again in a loop,
+        # so answer 422 with the expected body instead (no payment is verified/settled).
+        return JSONResponse(status_code=422, content={
+            "status": "invalid_request",
+            "message": "Payment header received but the request body has no 'text'. Resend with the same payment and a JSON body.",
+            "expected_body": {"text": "string (required, max 10000 chars)", "context": "general|legal|code|financial|medical (optional)"},
+        })
     elif x_payment:
         _valid, percall_payer = await verify_payment_percall(x_payment, PRICE_SANITIZE_PERCALL, str(request.url))
         if not _valid:
@@ -3042,9 +3069,15 @@ async def redact(
     return await sanitize(req, request, x_payment=x_payment, payment_signature=payment_signature)
 
 @app.post("/detect")
-async def detect(req: DemoRequest, request: Request):
-    """Alias for /demo — captures agents that infer endpoint names."""
-    return await demo_sanitize(req, request)
+async def detect(
+    req: SanitizeRequest,
+    request: Request,
+    x_payment: Optional[str] = Header(default=None, alias="X-PAYMENT"),
+    payment_signature: Optional[str] = Header(default=None, alias="PAYMENT-SIGNATURE"),
+):
+    """Alias for /sanitize (paid, same as /redact) — it is advertised as a paid x402
+    endpoint (402 probes, Bazaar/402index). For the free preview use /demo or /sanitize/preview."""
+    return await sanitize(req, request, x_payment=x_payment, payment_signature=payment_signature)
 
 @app.get("/anchor/{anchor_tx}")
 async def anchor_verify(anchor_tx: str):
@@ -3751,21 +3784,7 @@ async def x402_well_known():
     from fastapi.responses import JSONResponse, Response
     return JSONResponse({
         "x402Version": 2,
-        "accepts": [
-            {
-                "scheme": "exact",
-                "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
-                "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-                "decimals": 6,
-                "amount": "149000000",
-                "payTo": "giu4VciTkfWJNG1oeP6SzHEJwmabikJSMB91GaFNWE4",
-                "maxTimeoutSeconds": 300,
-                "extra": {
-                    "name": "USD Coin",
-                    "symbol": "USDC"
-                }
-            }
-        ],
+        "accepts": X402_PAYMENT_INFO["accepts"],
         "resource": {
             "url": "https://api.trustboost.dev/sanitize",
             "description": "PII sanitization with Proof of Sanitization on Solana",
@@ -3792,19 +3811,24 @@ async def x402_well_known_no_ext():
 
 
 @app.post("/trustboost-pii-sanitizer", include_in_schema=False)
-async def trustboost_skill_alias(request: Request):
-    """Alias for /sanitize — captures agents calling by ClawHub skill name."""
-    from fastapi import Request
-    body = await request.json()
-    from fastapi.responses import JSONResponse, Response
-    import httpx
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            "http://localhost:10000/sanitize",
-            json=body,
-            timeout=60
-        )
-        return JSONResponse(content=resp.json(), status_code=resp.status_code)
+async def trustboost_skill_alias(
+    request: Request,
+    x_payment: Optional[str] = Header(default=None, alias="X-PAYMENT"),
+    payment_signature: Optional[str] = Header(default=None, alias="PAYMENT-SIGNATURE"),
+):
+    """Alias for /sanitize — captures agents calling by ClawHub skill name.
+    Dispatches in-process (keeps payment headers; no loopback HTTP call)."""
+    try:
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise ValueError("body must be a JSON object")
+        req = SanitizeRequest(**body)
+    except Exception:
+        return JSONResponse(status_code=422, content={
+            "status": "invalid_request",
+            "message": "Body must be a JSON object, e.g. {\"text\": \"...\", \"tx_hash\": \"TRIAL\", \"wallet_address\": \"your-agent-id\"}.",
+        })
+    return await sanitize(req, request, x_payment=x_payment, payment_signature=payment_signature)
 
 
 # ── Discovery aliases — crawlers and agents looking for standard endpoints ──
