@@ -5,7 +5,7 @@ import hashlib
 import base58
 from typing import Optional, List, Literal
 import httpx
-from fastapi import FastAPI, Request, Header, HTTPException
+from fastapi import FastAPI, Request, Header
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
@@ -43,6 +43,8 @@ def _check_trial_rate_limit(ip: str) -> tuple[bool, int]:
     return False, minutes_left
 
 # ── Risk weights — server-side, deterministic ──────────────
+# Used to compute safety_score from the entity list returned by the model,
+# so scoring no longer depends on the model doing arithmetic correctly.
 RISK_WEIGHTS = {
     "CRITICAL": 0.40,
     "PRIVATE": 0.20,
@@ -57,22 +59,21 @@ HELIUS_API_KEY        = os.getenv("HELIUS_API_KEY")
 SUPABASE_URL          = os.getenv("SUPABASE_URL")
 SUPABASE_KEY          = os.getenv("SUPABASE_KEY")
 PAYMENT_WALLET        = os.getenv("PAYMENT_WALLET")
-POLAR_WEBHOOK_SECRET  = os.getenv("POLAR_WEBHOOK_SECRET", "")
-_pw_preview = f"{POLAR_WEBHOOK_SECRET[:6]}...{POLAR_WEBHOOK_SECRET[-6:]}" if len(POLAR_WEBHOOK_SECRET) >= 12 else "(demasiado corto)"
-print(f"[DIAG] POLAR_WEBHOOK_SECRET present: {bool(POLAR_WEBHOOK_SECRET)}, length: {len(POLAR_WEBHOOK_SECRET)}, preview: {_pw_preview}")
-POLAR_ACCESS_TOKEN    = os.getenv("POLAR_ACCESS_TOKEN", "")
-print(f"[DIAG] POLAR_ACCESS_TOKEN present: {bool(POLAR_ACCESS_TOKEN)}")
 TRIAL_QUOTA           = int(os.getenv("TRIAL_QUOTA", "50"))
 PAID_QUOTA            = int(os.getenv("PAID_QUOTA", "10000"))
 REQUIRED_PAYMENT_USDC = int(os.getenv("REQUIRED_PAYMENT_USDC", "149"))
-PRICE_SANITIZE_PERCALL = os.getenv("PRICE_SANITIZE_PERCALL", "0.01")
+PRICE_SANITIZE_PERCALL = os.getenv("PRICE_SANITIZE_PERCALL", "0.01")  # pay-per-call entry point (USDC)
 PAYAI_FACILITATOR_URL  = os.getenv("PAYAI_FACILITATOR_URL", "https://facilitator.payai.network")
+# CDP Facilitator (Coinbase) — primario. El Bazaar de agentic.market (CDP Bazaar)
+# indexa SOLO endpoints que settlean via CDP. Sin esto TrustBoost no aparece en
+# agentic.market pese a pagos validos via PayAI. Replica el setup de VeraData/Intelica.
 CDP_FACILITATOR_URL   = os.getenv("CDP_FACILITATOR_URL", "https://api.cdp.coinbase.com/platform/v2/x402")
 CDP_API_KEY_ID        = os.getenv("CDP_API_KEY_ID", "").strip()
 CDP_API_KEY_SECRET    = os.getenv("CDP_API_KEY_SECRET", "")
+# DIAG (temporal): confirmar que las env vars CDP llegan al runtime.
 print(f"[DIAG] CDP_API_KEY_ID present: {bool(CDP_API_KEY_ID)}, CDP_API_KEY_SECRET present: {bool(CDP_API_KEY_SECRET)}")
-FLUXA_PROXY_SECRET     = os.getenv("FLUXA_PROXY_SECRET", "")
-WALLET_BASE             = os.getenv("WALLET_BASE", "0xCf1d31020A7915421f6d66B9835Dcb6f422337E7")
+FLUXA_PROXY_SECRET     = os.getenv("FLUXA_PROXY_SECRET", "")  # aditivo: reconoce llamadas ya cobradas/liquidadas por FluxA Monetize
+WALLET_BASE             = os.getenv("WALLET_BASE", "0xCf1d31020A7915421f6d66B9835Dcb6f422337E7")  # shared wallet, same as VeraData/Intelica
 USDC_BASE_CONTRACT      = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
@@ -91,14 +92,33 @@ app.add_middleware(
     ],
 )
 
+# ── x402 discovery middleware (aditivo) ──────────────────────────────────────
+# Responde 402 + PAYMENT-REQUIRED a los SONDEOS de discovery (GET/HEAD, o POST
+# sin body, como agentic.market / x402-list / Usetested) ANTES de que FastAPI
+# valide el body Pydantic (que daria 405/422).
+# IMPORTANTE: un POST que SI trae body (JSON con text, tx_hash=TRIAL, tx_hash
+# prepago, etc.) o un header de pago NUNCA se intercepta aqui: pasa al handler,
+# que decide (TRIAL / prepago / per-call / 402). Interceptar todo POST sin header
+# de pago bloqueaba TRIAL y bundle prepago (regresion del 2026-07-16, commit 47fb9c0).
 _PAYMENT_HEADERS = {"x-payment", "payment-signature", "x402-payment", "authorization"}
-_X402_PAID_ROUTES = {"/sanitize", "/redact", "/detect", "/sanitize/quick"}
+_X402_PAID_ROUTES = {"/sanitize", "/redact", "/detect", "/sanitize/quick", "/trustboost-pii-sanitizer"}
+
+
+def _is_discovery_probe(request: Request) -> bool:
+    """True si el request es un sondeo sin credenciales: GET/HEAD, o POST sin body."""
+    if request.method in ("GET", "HEAD"):
+        return True
+    if request.method == "POST":
+        if "transfer-encoding" in request.headers:  # body chunked: dejar pasar al handler
+            return False
+        return request.headers.get("content-length", "0").strip() in ("", "0")
+    return False
 
 
 @app.middleware("http")
 async def x402_discovery_middleware(request: Request, call_next):
     path = request.url.path.rstrip("/")
-    if path in _X402_PAID_ROUTES:
+    if path in _X402_PAID_ROUTES and _is_discovery_probe(request):
         has_payment = any(h in request.headers for h in _PAYMENT_HEADERS)
         if not has_payment:
             price = PRICE_SANITIZE_PERCALL if path != "/sanitize" else "0.01"
@@ -111,9 +131,6 @@ app.include_router(demo_router)
 
 from mcp_router import router as mcp_router
 app.include_router(mcp_router)
-
-from mcp_security_router import router as mcp_security_router
-app.include_router(mcp_security_router)
 
 @app.get("/llms.txt")
 async def llms_txt():
@@ -168,8 +185,13 @@ response = requests.post(TRUSTBOOST_URL, json={
 
 if response.status_code == 402:
     payment_info = response.json()
+    # payment_info contains: payment_address, amount_usdc, network
+    # Send 149 USDC to payment_info["payment_address"] on Solana mainnet
+    # Use your Solana wallet to send the payment
+    # Save the transaction hash (tx_hash)
     tx_hash = "YOUR_SOLANA_TX_HASH_HERE"
 
+    # Step 2: Retry with tx_hash
     response = requests.post(TRUSTBOOST_URL, json={
         "text": "Contact John at john@company.com, SSN 123-45-6789",
         "wallet_address": "your-agent-wallet",
@@ -182,6 +204,7 @@ if response.status_code == 402:
     print(f"Sanitized: {sanitized}")
     print(f"Proof on Solana: {proof_tx}")
 
+# Trial mode (50 free sanitizations)
 trial_response = requests.post(TRUSTBOOST_URL, json={
     "text": "My email is test@example.com",
     "wallet_address": "your-agent-wallet",
@@ -302,7 +325,10 @@ Pipeline: TrustBoost /sanitize/quick → Intelica /intel → VeraData /sanctions
 
 @app.get("/.well-known/erc8004-agent.json")
 async def erc8004_agent_card():
-    """Agent card in ERC-8004 Identity Registry format (eip-8004#registration-v1)."""
+    """Agent card in ERC-8004 Identity Registry format (eip-8004#registration-v1).
+    Lets agents discover TrustBoost on the ERC-8004 Identity Registry (Base mainnet:
+    0x8004A169FB4a3325136EB29fA0ceB6D2e539a432) and link validation to the on-chain proof.
+    Additive: does not alter the existing Circle-format agent-card.json route."""
     return {
         "type": "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
         "name": "TrustBoost",
@@ -335,7 +361,11 @@ async def erc8004_agent_card():
 
 @app.get("/.well-known/agent-card.json")
 async def agent_card():
-    """Circle Agent Stack compatible agent card."""
+    """
+    Circle Agent Stack compatible agent card.
+    Discoverable by autonomous AI agents in Circle Agent Marketplace.
+    Follows the emerging agent service discovery standard.
+    """
     return {
         "schema_version": "v1",
         "name": "TrustBoost PII Sanitizer",
@@ -488,6 +518,9 @@ async def agent_card():
     }
 
 # ── A2A message/send endpoint ─────────────────────────────
+# Required for full A2A protocol conformance.
+# Allows any A2A-compatible orchestrator (LangGraph, CrewAI, AutoGen)
+# to invoke TrustBoost as a native agent in a multi-agent pipeline.
 
 class A2AMessagePart(BaseModel):
     type: str = "text"
@@ -505,7 +538,13 @@ class A2ASendRequest(BaseModel):
 
 @app.post("/message/send")
 async def a2a_message_send(req: A2ASendRequest, request: Request):
-    """A2A Protocol — message/send endpoint."""
+    """A2A Protocol — message/send endpoint.
+    
+    Accepts A2A-formatted messages and runs PII sanitization.
+    Returns A2A-formatted response with sanitized text.
+    Compatible with: LangGraph, CrewAI, AutoGen, Google A2A orchestrators.
+    """
+    # Extract text from A2A message parts
     text = ""
     for part in req.message.parts:
         if part.type == "text" and part.text:
@@ -527,11 +566,13 @@ async def a2a_message_send(req: A2ASendRequest, request: Request):
             }
         })
 
+    # Limit to 10K chars
     if len(text) > 10000:
         return JSONResponse(status_code=413, content={
             "error": {"code": -32001, "message": "Text exceeds 10,000 char limit. Split and retry."}
         })
 
+    # Run sanitization — TRIAL by default for A2A agents
     try:
         result = await gpt_sanitize(text, context="general")
         model_cleaned = result.get("cleaned_text", "") or ""
@@ -552,6 +593,7 @@ async def a2a_message_send(req: A2ASendRequest, request: Request):
         sanitized, _, _ = enforce_redaction(text, model_cleaned, entities_list)
         score, category = compute_score(entities_list)
 
+        # Log to audit — A2A calls use anonymous wallet
         await log_audit("A2A", len(text), sanitized, score, category, "a2a-agent", "A2A", "general")
 
         return JSONResponse(status_code=200, content={
@@ -613,28 +655,17 @@ SUPABASE_HEADERS = {
     "Content-Type": "application/json"
 }
 
-# ── Key dedicada (service_role) para las tablas del badge y los reportes
-# pagados ──────────────────────────────────────────────────────────
-# service_role SIEMPRE salta RLS, sin importar las políticas — por eso
-# estas dos tablas pueden tener RLS activado de verdad (no desactivado)
-# sin que el backend deje de poder escribir en ellas. Se usa una key
-# SEPARADA de SUPABASE_KEY (que el resto del archivo, ~4000 líneas, ya
-# usa y funciona) para no arriesgar nada que ya está en producción —
-# este arreglo es quirúrgico, solo toca estas dos tablas.
-SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", SUPABASE_KEY)
-SUPABASE_SERVICE_HEADERS = {
-    "apikey": SUPABASE_SERVICE_ROLE_KEY,
-    "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
-    "Content-Type": "application/json"
-}
-
 # ── Fase 4: Proof of Sanitization on Solana ───────────────
 SOLANA_SERVICE_KEY = os.getenv("SOLANA_SERVICE_PRIVATE_KEY")
 HELIUS_API_KEY     = os.getenv("HELIUS_API_KEY", "")
 SOLANA_RPC_URL     = f"https://mainnet.helius-rpc.com/?api-key={HELIUS_API_KEY}" if HELIUS_API_KEY else "https://api.mainnet-beta.solana.com"
 
 async def anchor_proof_on_solana(wallet: str, score: float, category: str, text_length: int) -> str | None:
-    """Anchor a Proof of Sanitization on Solana via a Memo transaction."""
+    """
+    Anchor a Proof of Sanitization on Solana via a Memo transaction.
+    Returns the Solana transaction signature or None if unavailable.
+    Only runs for PAID users — never for TRIAL.
+    """
     if not SOLANA_SERVICE_KEY:
         return None
     try:
@@ -644,15 +675,19 @@ async def anchor_proof_on_solana(wallet: str, score: float, category: str, text_
         from solders.message import Message
         from solders.instruction import Instruction, AccountMeta
         from solders.pubkey import Pubkey
+        from solders.hash import Hash
         import httpx
 
+        # Build the proof hash
         timestamp = datetime.now(timezone.utc).isoformat()
         proof_data = f"{wallet}:{timestamp}:{score}:{category}:{text_length}"
         proof_hash = hashlib.sha256(proof_data.encode()).hexdigest()
 
+        # Decode the service keypair
         key_bytes = base58.b58decode(SOLANA_SERVICE_KEY)
         keypair = Keypair.from_bytes(key_bytes)
 
+        # Build Memo instruction
         MEMO_PROGRAM_ID = Pubkey.from_string("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr")
         memo_data = f"trustboost:proof:{proof_hash[:32]}".encode()
         memo_ix = Instruction(
@@ -661,6 +696,7 @@ async def anchor_proof_on_solana(wallet: str, score: float, category: str, text_
             data=memo_data
         )
 
+        # Get recent blockhash
         async with httpx.AsyncClient() as client:
             bh_response = await client.post(
                 SOLANA_RPC_URL,
@@ -668,11 +704,13 @@ async def anchor_proof_on_solana(wallet: str, score: float, category: str, text_
                 timeout=10
             )
             bh_data = bh_response.json()
-            recent_blockhash = bh_data["result"]["value"]["blockhash"]
+            recent_blockhash = Hash.from_string(bh_data["result"]["value"]["blockhash"])
 
+            # Build and sign transaction
             msg = Message.new_with_blockhash([memo_ix], keypair.pubkey(), recent_blockhash)
             tx = Transaction([keypair], msg, recent_blockhash)
 
+            # Send transaction
             tx_response = await client.post(
                 SOLANA_RPC_URL,
                 json={"jsonrpc": "2.0", "id": 1, "method": "sendTransaction", "params": [base58.b58encode(bytes(tx)).decode()]},
@@ -688,26 +726,39 @@ async def anchor_proof_on_solana(wallet: str, score: float, category: str, text_
         return None
 
 # ── Fase 1: Context-Aware Sanitization ────────────────────
+# Enum de contextos válidos
+
 VALID_CONTEXTS = {"general", "legal", "code", "financial", "medical"}
 
 # ── Fase 2: Privacy Budget por Agente ─────────────────────
+# Controla cuántas sanitizaciones puede hacer un operador por día.
+# Si el operador no tiene budget registrado → sin límite (comportamiento
+# idéntico a v2.3). Esto mantiene backward-compatibility total.
 
 async def get_agent_budget(operator_id: str) -> dict | None:
-    """Retorna el budget activo del operador, o None si no existe."""
-    async with httpx.AsyncClient() as client:
-        r = await client.get(
-            f"{SUPABASE_URL}/rest/v1/agent_budgets",
-            headers=SUPABASE_HEADERS,
-            params={
-                "operator_id": f"eq.{operator_id}",
-                "is_active": "eq.true",
-                "select": "operator_id,daily_limit,context_limit",
-                "limit": "1"
-            }
-        )
-        if r.status_code == 200:
-            rows = r.json()
-            return rows[0] if rows else None
+    """Retorna el budget activo del operador, o None si no existe.
+
+    El budget es una feature opcional: si Supabase no responde se trata como
+    "sin budget" (fail-open) para que una caida de esa tabla no tumbe /sanitize.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            r = await client.get(
+                f"{SUPABASE_URL}/rest/v1/agent_budgets",
+                headers=SUPABASE_HEADERS,
+                params={
+                    "operator_id": f"eq.{operator_id}",
+                    "is_active": "eq.true",
+                    "select": "operator_id,daily_limit,context_limit",
+                    "limit": "1"
+                }
+            )
+            if r.status_code == 200:
+                rows = r.json()
+                return rows[0] if rows else None
+            return None
+    except Exception as e:
+        print(f"[Budget] get_agent_budget failed, treating as no budget: {e}")
         return None
 
 
@@ -747,12 +798,20 @@ async def register_budget_usage(operator_id: str, context: str, audit_log_id: in
 
 
 async def check_budget(operator_id: str, context: str) -> tuple[bool, dict]:
-    """Verifica si el operador tiene budget disponible para esta request."""
+    """Verifica si el operador tiene budget disponible para esta request.
+
+    Retorna (is_allowed, budget_info).
+    Si el operador no tiene budget registrado → siempre permitido.
+    Si tiene budget y está agotado → bloqueado con 429.
+    Si tiene context_limit y el context no coincide → bloqueado con 403.
+    """
     budget = await get_agent_budget(operator_id)
 
     if budget is None:
+        # Sin budget registrado — sin límite, comportamiento v2.3
         return True, {"budget_active": False}
 
+    # Verificar restricción de contexto
     ctx_limit = budget.get("context_limit")
     if ctx_limit and ctx_limit != context:
         return False, {
@@ -762,6 +821,7 @@ async def check_budget(operator_id: str, context: str) -> tuple[bool, dict]:
             "requested_context": context,
         }
 
+    # Verificar límite diario
     used_today = await get_budget_used_today(operator_id)
     daily_limit = budget.get("daily_limit", 100)
     remaining = daily_limit - used_today
@@ -783,8 +843,10 @@ async def check_budget(operator_id: str, context: str) -> tuple[bool, dict]:
         "remaining_today": remaining,
     }
 
+# Addenda de contexto — se inyectan AL FINAL del system_prompt base.
+# El prompt base no se toca. Solo se extiende.
 CONTEXT_ADDENDA: dict[str, str] = {
-    "general": "",
+    "general": "",  # Sin addendum — comportamiento idéntico al original
 
     "legal": """
 ## CONTEXT OVERRIDE: LEGAL
@@ -888,11 +950,20 @@ ESCALATION: Co-occurrence of diagnosis + patient name + date of birth in the sam
 
 
 def _build_system_prompt(context: str) -> str:
-    """Returns the full system prompt for gpt-4o-mini."""
+    """Returns the full system prompt for gpt-4o-mini.
+
+    Strategy: keep the original prompt 100% intact (it is battle-tested and
+    production-grade). Append the context addendum at the end so the model
+    reads domain rules AFTER the universal rules — consistent with how GPT
+    processes long system prompts (recency bias toward the end).
+    The general context has an empty addendum, making the call identical to
+    the original v2.2 behavior.
+    """
     addendum = CONTEXT_ADDENDA.get(context, "")
     return SYSTEM_PROMPT_BASE + addendum
 
 
+# ── Original system prompt — UNMODIFIED from v2.2 ─────────
 SYSTEM_PROMPT_BASE = """You are TrustBoost AI Sanitizer — a precision PII redaction engine for autonomous AI agent pipelines. Your sole function is to detect and neutralize Personally Identifiable Information before it reaches LLM providers.
 
 ## CORE DIRECTIVE
@@ -1110,14 +1181,21 @@ Empty input schema:
 
 
 class SanitizeRequest(BaseModel):
-    text: Optional[str] = None
+    text: Optional[str] = None   # Optional — empty body triggers x402 payment response
     tx_hash: Optional[str] = None
     wallet_address: Optional[str] = None
-    context: str = "general"
+    context: str = "general"  # ← Fase 1: opcional, default general, 100% backward-compatible
 
 
 class Entity(BaseModel):
-    """A single PII entity detected in the input."""
+    """A single PII entity detected in the input.
+
+    `type` is a short machine-friendly label (e.g. "email", "aws_access_key",
+    "jp_my_number", "jp_full_name"). `category` is the risk tier used for
+    scoring. `redacted_text` is the original substring that was replaced with
+    [REDACTED]; it is returned so callers can audit *what* was removed without
+    having to diff input vs output. Callers that don't need it can ignore it.
+    """
     type: str
     category: Literal["CRITICAL", "PRIVATE", "SENSITIVE"]
     redacted_text: str
@@ -1154,8 +1232,8 @@ async def check_replay(tx_hash: str) -> bool:
             params={"tx_hash": f"eq.{tx_hash}", "select": "tx_hash"}
         )
         if r.status_code == 200 and len(r.json()) > 0:
-            return True
-        return False
+            return True  # Ya existe — no es replay, es reutilización válida
+        return False  # No existe — primer uso
 
 async def register_tx_hash(tx_hash: str):
     """Registra el tx_hash en used_tx la primera vez."""
@@ -1212,8 +1290,16 @@ async def helius_verify(tx_hash: str) -> tuple[bool, float]:
     return False, 0
 
 
+# ── BASE (eip155:8453) on-chain verify — mirrors helius_verify for Solana ──
+# ADDITIVE: parallel Base prepaid path. Reuses x402_direct_verify (already
+# validated against real mainnet tx). No Solana/Helius logic touched.
 async def base_verify(tx_hash: str) -> tuple[bool, float]:
-    """Verify a 149 USDC prepaid ERC-20 transfer to WALLET_BASE on Base."""
+    """Verify a 149 USDC prepaid ERC-20 transfer to WALLET_BASE on Base.
+    Mirrors helius_verify's contract: returns (is_valid, amount_usdc).
+    Additive prepaid path only — pay-per-call (0.01) is handled separately by
+    verify_payment_percall's on-chain branch. Falls back to False if the on-chain
+    module is unavailable or RPC fails.
+    """
     try:
         import sys as _sys, os as _os
         _here = _os.path.dirname(_os.path.abspath(__file__))
@@ -1229,8 +1315,16 @@ async def base_verify(tx_hash: str) -> tuple[bool, float]:
         return False, 0.0
 
 
+# ── GPT-4o-mini: sanitización multilingüe + context-aware ──
 def _failsafe_result(original_text: str) -> dict:
-    """The one, single-source-of-truth failsafe shape."""
+    """The one, single-source-of-truth failsafe shape: redact the entire
+    input as a single CRITICAL entity. Used by BOTH failure paths below --
+    a malformed/unparseable OpenAI response (_parse_model_json) and an
+    OpenAI API call that fails outright (gpt_sanitize's except block).
+    Extracted so the two paths can never drift apart the way the client-
+    side tutorial fix and this server had already drifted before this
+    audit (2026-08-28) -- one function, one shape, both callers.
+    """
     return {
         "status": "success",
         "cleaned_text": "[REDACTED]",
@@ -1245,7 +1339,26 @@ def _failsafe_result(original_text: str) -> dict:
 
 
 async def gpt_sanitize(text: str, context: str = "general") -> dict:
-    """Sanitize text using the context-specific system prompt."""
+    """Sanitize text using the context-specific system prompt.
+
+    Fase 1 change: accepts an optional `context` parameter that injects a
+    domain-specific addendum AFTER the base prompt. The base prompt is
+    100% unchanged from v2.2 — only the addendum is new. When context is
+    'general' (default), the addendum is empty and behavior is identical
+    to v2.2. All other logic (enforce_redaction, scoring, failsafe) is
+    unaffected.
+
+    Fase 5 (2026-08-28, found during a cross-repo audit of the client-side
+    tutorial fixes made the same day): the OpenAI call itself was never
+    wrapped in a try/except. `_parse_model_json` below already fails safe
+    on a malformed/garbage RESPONSE from OpenAI -- but a call that never
+    gets a response at all (rate limit, timeout, connection error, auth
+    failure) was previously unhandled and would 500 the whole request
+    instead of failing closed. Now both failure modes -- "OpenAI responded
+    with garbage" and "OpenAI never responded" -- produce the identical
+    failsafe shape via _failsafe_result(), so downstream handling (the
+    `is_failsafe` check in the /sanitize route) treats them the same way.
+    """
     system_prompt = _build_system_prompt(context)
     try:
         r = await openai_client.chat.completions.create(
@@ -1266,7 +1379,17 @@ async def gpt_sanitize(text: str, context: str = "general") -> dict:
 
 
 def _parse_model_json(raw: str, original_text: str) -> dict:
-    """Parse the model's JSON response defensively."""
+    """Parse the model's JSON response defensively.
+
+    OpenAI's `response_format=json_object` constraint should already make
+    `raw` a JSON object, but a malformed response should never 500 the API —
+    sanitization failures must fail SAFE (treat the whole input as unredacted
+    PII) rather than risk leaking it. Strategy:
+      1. Try strict json.loads.
+      2. Fall back to extracting the first {...} block.
+      3. Final fallback: redact the entire input as a single CRITICAL entity.
+         Intentionally conservative — over-redact rather than silently leak.
+    """
     try:
         return json.loads(raw)
     except Exception:
@@ -1281,14 +1404,61 @@ def _parse_model_json(raw: str, original_text: str) -> dict:
     return _failsafe_result(original_text)
 
 
+# ── Server-side redaction enforcer ──────────────────────
+#
+# Why this exists:
+#   The model returns two things that have to agree: `cleaned_text` (the
+#   redacted string) and `entities` (the list of what was redacted). In
+#   practice they sometimes disagree — the model can correctly identify an
+#   entity in `entities` but fail to actually replace it in `cleaned_text`,
+#   producing a sanitized_content that still leaks PII while the audit trail
+#   says everything's fine. That's worse than no audit trail.
+#
+# What it does:
+#   For every entity whose `redacted_text` is a non-empty substring of the
+#   ORIGINAL input, replace ALL occurrences with [REDACTED] in cleaned_text.
+#   Long entities are processed first so a phone number is not partially
+#   eaten by an overlapping shorter entity.
+#
+# Conservative redaction:
+#   If `田中太郎` appears twice in the input, both occurrences are replaced.
+#   The same `redacted_text` listed twice in `entities` is fine; replacement
+#   is idempotent (`[REDACTED]` cannot match any entity literally).
+#
+# Telemetry:
+#   Returns a `redaction_source` string: "server" if the enforcer had to
+#   replace anything the model missed, "model" if the model and server agree.
+#   The `fallback_full_redaction` value is set elsewhere (in the handler)
+#   when the failsafe parser triggers — the enforcer never sets it.
+#
+# Failure modes:
+#   - Empty `redacted_text`: skipped (can't replace nothing).
+#   - `redacted_text` not present in original input: returned in
+#     `unmatched_entities` so callers can audit. The model probably
+#     paraphrased the redacted_text or hallucinated; the entity is still
+#     reported (and counts toward the score) but cannot be enforced from text.
+
 def enforce_redaction(
     original_text: str,
     model_cleaned_text: str,
     entities: list,
 ) -> tuple[str, str, list]:
-    """Apply entity list to original text; return (cleaned_text, source, unmatched)."""
+    """Apply entity list to original text; return (cleaned_text, source, unmatched).
+
+    `source` is "model" when the server-enforced cleaned_text matches what
+    the model produced (i.e. the model already did the redaction correctly),
+    or "server" when the enforcer had to fix one or more leaks.
+
+    `unmatched` is a list of entity dicts whose `redacted_text` could not be
+    located verbatim in the original input. They still appear in the main
+    `entities` list and still count toward the safety score; this auxiliary
+    list exists so callers can detect model paraphrasing or hallucination.
+    """
     REDACTED = "[REDACTED]"
 
+    # Sort by descending length so longer entities are replaced first.
+    # This matters when one entity's text contains another's (e.g. a full
+    # phone number that includes a country-code substring also flagged).
     targets = sorted(
         (e for e in entities if isinstance(e, dict) and (e.get("redacted_text") or "")),
         key=lambda e: len(e.get("redacted_text") or ""),
@@ -1302,19 +1472,30 @@ def enforce_redaction(
     for ent in targets:
         needle = ent.get("redacted_text") or ""
         if needle in seen_targets:
-            continue
+            continue  # already replaced this exact substring on a prior pass
         seen_targets.add(needle)
         if needle in original_text:
+            # Replace ALL occurrences — conservative redaction. If 田中太郎
+            # appears twice in the original, both are scrubbed.
             cleaned = cleaned.replace(needle, REDACTED)
         else:
+            # Model said it redacted X but X never appears in the input.
+            # Could be paraphrasing, normalization, or hallucination.
             unmatched.append(ent)
 
     source = "model" if cleaned == model_cleaned_text else "server"
     return cleaned, source, unmatched
 
 
+# ── Server-side scoring ───────────────────────────────────
+
 def compute_score(entities: list) -> tuple[float, str]:
-    """Compute (safety_score, risk_category) deterministically from entities."""
+    """Compute (safety_score, risk_category) deterministically from entities.
+
+    Score: sum of per-category weights, capped at 1.0.
+    Category: highest-severity tier with at least one entity, or "CLEAN".
+    Unknown categories are treated as SENSITIVE (conservative).
+    """
     if not entities:
         return 0.0, "CLEAN"
     score = 0.0
@@ -1326,13 +1507,19 @@ def compute_score(entities: list) -> tuple[float, str]:
         score += RISK_WEIGHTS[cat]
         seen.add(cat)
     score = min(round(score, 4), 1.0)
-    for tier in RISK_ORDER:
+    for tier in RISK_ORDER:  # CRITICAL > PRIVATE > SENSITIVE
         if tier in seen:
             return score, tier
     return score, "SENSITIVE"
 
+# ── Audit trail en Supabase ────────────────────────────────
+
 async def log_audit(tx_hash, length, sanitized, score, category, wallet, license_type, context="general") -> int | None:
-    """Log sanitization to audit_log. Returns the new row id for budget linkage."""
+    """Log sanitization to audit_log. Returns the new row id for budget linkage.
+
+    Fase 1: added `context` parameter.
+    Fase 2: returns audit_log id so budget_usage can reference it.
+    """
     async with httpx.AsyncClient() as client:
         r = await client.post(
             f"{SUPABASE_URL}/rest/v1/audit_log",
@@ -1355,6 +1542,8 @@ async def log_audit(tx_hash, length, sanitized, score, category, wallet, license
                 return rows[0].get("id")
         return None
 
+# ── Health check ───────────────────────────────────────────
+
 @app.get("/health")
 async def health():
     return JSONResponse(
@@ -1368,10 +1557,17 @@ async def health():
         }
     )
 
+# ── Endpoint principal ─────────────────────────────────────
+
 @app.get("/verify/{anchor_tx}")
 async def verify_proof(anchor_tx: str):
-    """Public endpoint to verify a Proof of Sanitization anchor on Solana."""
+    """
+    Public endpoint to verify a Proof of Sanitization anchor on Solana.
+    Anyone can verify that a sanitization occurred at a specific time.
+    No authentication required — the proof is public and immutable.
+    """
     try:
+        # Check if anchor exists in audit_log
         async with httpx.AsyncClient() as client:
             r = await client.get(
                 f"{SUPABASE_URL}/rest/v1/audit_log",
@@ -1412,6 +1608,18 @@ async def verify_proof(anchor_tx: str):
             content={"status": "error", "message": "Verification failed — please try again"}
         )
 
+# ── x402 Payment Protocol Support ─────────────────────────
+# When an agent calls /sanitize without a valid tx_hash,
+# TrustBoost responds with HTTP 402 Payment Required
+# containing all the information the agent needs to pay
+# autonomously and retry — no human intervention required.
+
+# ─── Pay-Per-Call x402 Verification (standard verify/settle flow) ─────────────
+# This is the LOW-FRICTION entry point for autonomous agents — standard x402 v2
+# verify/settle via PayAI facilitator, accepting both PAYMENT-SIGNATURE (v2) and
+# X-PAYMENT (v1 legacy) headers. Coexists with the existing TRIAL and prepaid
+# 149 USDC quota system below — this does NOT replace them.
+
 import base64 as _b64_pc
 import httpx as _httpx_pc
 
@@ -1419,10 +1627,17 @@ USDC_SOLANA_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 
 
 async def verify_payment_percall(x_payment: str, price_usdc: str = None, resource_url: str = None) -> tuple[bool, str]:
-    """Verify a single x402 payment via PayAI facilitator."""
+    """
+    Verify a single x402 payment via PayAI facilitator.
+    Supports both Base mainnet and Solana mainnet — detects network from the
+    client's payment_payload and verifies against the matching requirements.
+    Returns (is_valid, payer_wallet_address).
+    Does not touch the existing TRIAL/prepaid-quota system.
+    """
     if not x_payment:
         return False, ""
 
+    # Defensive: callers may pass a FastAPI Header object, not a str.
     x_payment = str(x_payment) if x_payment is not None else ""
     if not x_payment:
         return False, ""
@@ -1431,15 +1646,18 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None, resourc
     amount = str(int(float(price) * 1_000_000))
     try:
         _raw = x_payment.strip()
+        # Strip any x402 / x- scheme prefix (case-insensitive)
         if _raw.lower().startswith("x402 "):
             _raw = _raw[len("x402 "):].strip()
         elif _raw.lower().startswith("x-"):
             _raw = _raw[2:].strip()
+        # Tolerant decode: drop anything that is not ASCII base64, then re-pad.
         import re as _re
         _b64_clean = _re.sub(r"[^A-Za-z0-9+/=]", "", _raw)
         _pad = (-len(_b64_clean)) % 4
         _b64_clean += "=" * _pad
         _decoded = _b64_pc.b64decode(_b64_clean)
+        # Be resilient to stray non-UTF8 bytes (e.g. copy/paste artifacts)
         try:
             _json_str = _decoded.decode("utf-8")
         except UnicodeDecodeError:
@@ -1449,6 +1667,10 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None, resourc
         print(f"TrustBoost: failed to decode payment token: {e}")
         return False, ""
 
+    # Detect which network the client signed for. Clientes x402 v2 reales (ej.
+    # agentcash) no ponen "network" en la raiz del payload -- lo mandan anidado
+    # dentro de "accepted" (el objeto que eligieron de accepts[] en el 402).
+    # Revisar ambos lugares evita probar redes que el cliente nunca firmo.
     client_network = payment_payload.get("network") or payment_payload.get("accepted", {}).get("network", "")
 
     NETWORK_CONFIGS = {
@@ -1464,6 +1686,10 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None, resourc
         },
     }
 
+    # ── DIRECT ON-CHAIN VERIFY (additive; parallel to PayAI facilitator) ─────
+    # If the envelope carries a real on-chain transactionHash (an agent that paid
+    # USDC directly to our wallet), verify it against the chain RPC — no PayAI
+    # JWT required. Falls through to PayAI below if no tx_hash is present.
     try:
         import sys as _sys, os as _os
         _here = _os.path.dirname(_os.path.abspath(__file__))
@@ -1485,6 +1711,8 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None, resourc
     except Exception as _e:
         print(f"TrustBoost: direct on-chain verify skipped: {type(_e).__name__}: {str(_e)[:80]}")
 
+    # If client specified a known network, verify only that one.
+    # Otherwise (legacy clients), try Solana first (original default), then Base.
     networks_to_try = [client_network] if client_network in NETWORK_CONFIGS else list(NETWORK_CONFIGS.keys())
 
     for network in networks_to_try:
@@ -1498,6 +1726,10 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None, resourc
             "maxTimeoutSeconds": 300,
             "extra": cfg["extra"],
         }
+        # Strip any "extensions" (e.g. bazaar) the client may have echoed back from
+        # the 402 discovery response — PayAI's /verify strictly validates extension
+        # shape (requires "type": "http" etc.) and rejects malformed echoes.
+        # Extensions belong in discovery responses, not in payment verification.
         clean_payment_payload = {k: v for k, v in payment_payload.items() if k != "extensions"}
 
         full_payload = {**clean_payment_payload, "accepted": requirements}
@@ -1507,6 +1739,8 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None, resourc
             "paymentRequirements": requirements,
         }
 
+        # Facilitators: CDP primero (indexa en el Bazaar de agentic.market),
+        # PayAI como fallback. Replica el setup de VeraData/Intelica.
         facilitators = []
         if CDP_API_KEY_ID and CDP_API_KEY_SECRET:
             facilitators.append({"url": CDP_FACILITATOR_URL, "name": "cdp", "auth": "cdp"})
@@ -1522,6 +1756,8 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None, resourc
                         _pem = CDP_API_KEY_SECRET.strip().replace("\\n", "\n")
                         if not _pem.endswith("\n"):
                             _pem += "\n"
+                        # Carga la key (maneja SEC1 EC y RSA) y pasa el OBJETO a jwt.encode
+                        # (replica _build_cdp_jwt de VeraData/Intelica, que SI funciona).
                         _private_key = _ser.load_pem_private_key(_pem.encode("utf-8"), password=None)
                         _uri = f"POST api.cdp.coinbase.com{_url_path(fac['url'])}/verify"
                         _now = int(_time.time())
@@ -1543,8 +1779,18 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None, resourc
                     )
                 if resp.status_code == 200 and resp.json().get("isValid", False):
                     payer = payment_payload.get("payload", {}).get("authorization", {}).get("from", "")
+                    # FIX (aditivo): antes, un verify exitoso nunca llamaba a /settle -- la
+                    # logica de settle (con reintentos + extension bazaar) solo estaba
+                    # dentro del camino de verify FALLIDO, y ademas ahi mismo se saltaba
+                    # para CDP con un "continue" -- o sea, CDP nunca liquidaba nada, ni
+                    # siquiera cuando el pago era 100% valido. Se agrega aqui el settle
+                    # real tras un verify exitoso, replicando la misma logica ya probada.
                     settle_ok = False
                     last_err = ""
+                    # JWT propio para /settle (distinto path que /verify) -- reutilizar
+                    # los headers de /verify aqui era el bug: CDP valida el claim "uri"
+                    # del JWT contra el path exacto de la request, y rechaza con 401
+                    # cuando no coincide.
                     settle_headers_main = dict(headers)
                     settle_body = verify_body
                     if fac["auth"] == "cdp":
@@ -1566,6 +1812,12 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None, resourc
                             settle_headers_main["Authorization"] = f"Bearer {_jwt0}"
                         except Exception as _je0:
                             print(f"TrustBoost CDP settle (main) JWT failed: {_je0}")
+                        # CDP Bazaar indexing: el settle debe llevar resource.url +
+                        # extensions.bazaar en el paymentPayload. FIX: armar esto ANTES
+                        # de la unica llamada a /settle -- un mismo nonce EIP-3009 no se
+                        # puede settlear dos veces (una llamada sin bazaar y otra con
+                        # bazaar sobre el mismo nonce falla: "authorization nonce already
+                        # submitted; transaction already on-chain").
                         if resource_url:
                             try:
                                 _bazaar_ext = {
@@ -1629,13 +1881,14 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None, resourc
                     print(f"TrustBoost settle OK via {fac['name']} (payer={payer})")
                     return True, payer
                 else:
+                    # CDP /verify rechazó el pago -> log para debug (VeraData hace esto)
                     try:
                         _cdp_body = resp.json()
                     except Exception:
                         _cdp_body = resp.text[:200]
                     print(f"TrustBoost CDP verify FAILED: {resp.status_code} {_cdp_body}")
                     if fac["name"] == "cdp":
-                        continue
+                        continue  # no usar fallback payai si CDP es el facilitador primario y falló validate
                     last_err = ""
                     for _attempt in range(2):
                         try:
@@ -1647,6 +1900,9 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None, resourc
                                 )
                             if sresp.status_code == 200:
                                 settle_ok = True
+                                # CDP Bazaar indexing: el settle debe llevar resource.url +
+                                # extensions.bazaar en el paymentPayload (no solo verify).
+                                # Replica el setup de VeraData/Intelica.
                                 if fac["auth"] == "cdp" and resource_url:
                                     try:
                                         _bazaar_ext = {
@@ -1684,6 +1940,7 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None, resourc
                                             "paymentPayload": _full_payload_with_resource,
                                             "paymentRequirements": requirements,
                                         }
+                                        # JWT CDP propio para /settle (path distinto a /verify)
                                         _settle_headers = {"Content-Type": "application/json"}
                                         try:
                                             import secrets as _sec2, time as _t2, jwt as _j2
@@ -1719,7 +1976,7 @@ async def verify_payment_percall(x_payment: str, price_usdc: str = None, resourc
                         print(f"TrustBoost settle ({fac['name']}) attempt {_attempt+1} failed: {last_err}")
                     if not settle_ok:
                         print(f"TrustBoost settle ({fac['name']}) FAILED: {last_err}")
-                        continue
+                        continue  # prueba el siguiente facilitador
                     print(f"TrustBoost settle OK via {fac['name']} (payer={payer})")
                     return True, payer
             except Exception as e:
@@ -1858,6 +2115,14 @@ X402_PAYMENT_INFO = {
     },
     "extensions": {
         "bazaar": {
+            # v2.7 (aditivo) — pendiente de sesion 001 (Bug 3): PayAI valida
+            # estrictamente el shape de CUALQUIER extension presente en el
+            # payload de verify. El fix real (que ya funciona) es no reenviar
+            # "extensions" al verificar (ver clean_payment_payload en
+            # verify_payment_percall). Este "type": "http" es una capa
+            # defensiva adicional para clientes de terceros que no hagan ese
+            # stripping y le peguen a /verify con el bazaar completo tal como
+            # se los devolvimos aqui en el discovery.
             "type": "http",
             "info": {
                 "name": "TrustBoost PII Sanitizer",
@@ -1917,7 +2182,9 @@ X402_METHOD_HEADERS = {
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    """Return 402 instead of 422 when /sanitize or /redact receive an invalid/missing body."""
+    """Return 402 instead of 422 when /sanitize or /redact receive an invalid/missing body.
+    Allows x402 validators (agentic.market, x402-list) to discover payment
+    requirements without a valid payload."""
     if request.url.path in ["/sanitize", "/redact"]:
         import base64, json
         return JSONResponse(
@@ -1947,7 +2214,9 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 @app.get("/sanitize")
 async def sanitize_discovery(request: Request):
-    """GET /sanitize — x402 Bazaar discovery endpoint."""
+    """GET /sanitize — x402 Bazaar discovery endpoint.
+    Returns 402 with PAYMENT-REQUIRED header for validator crawlers.
+    """
     import base64, json as _json
     return JSONResponse(
         status_code=402,
@@ -1975,8 +2244,15 @@ async def sanitize(
     x_payment: Optional[str] = Header(default=None, alias="X-PAYMENT"),
     payment_signature: Optional[str] = Header(default=None, alias="PAYMENT-SIGNATURE"),
 ):
-    x_payment = payment_signature or x_payment
+    x_payment = payment_signature or x_payment  # prefer x402 v2 PAYMENT-SIGNATURE, fallback to legacy X-PAYMENT
 
+    # ── Pay-per-call entry point (standard x402 verify/settle) ────────────────
+    # If the agent sent a PAYMENT-SIGNATURE/X-PAYMENT header, verify it as a
+    # single per-call payment via PayAI facilitator. This is independent of
+    # the TRIAL/tx_hash/prepaid-quota system below — both paths coexist.
+    # Robust header capture (case-insensitive; covers Cloudflare/proxy stripping
+    # non-standard headers like X-Payment). Fallback chain: FastAPI alias,
+    # then raw request.headers lookups.
     if not x_payment:
         x_payment = (
             request.headers.get("x-payment")
@@ -1985,12 +2261,22 @@ async def sanitize(
         )
     percall_payer = None
     if x_payment and (not req.text or not req.text.strip()):
-        pass
+        # Payment header present but no text: the caller is trying to pay but sent
+        # nothing to sanitize. A 402 here would make the agent pay again in a loop,
+        # so answer 422 with the expected body instead (no payment is verified/settled).
+        return JSONResponse(status_code=422, content={
+            "status": "invalid_request",
+            "message": "Payment header received but the request body has no 'text'. Resend with the same payment and a JSON body.",
+            "expected_body": {"text": "string (required, max 10000 chars)", "context": "general|legal|code|financial|medical (optional)"},
+        })
     elif x_payment:
         _valid, percall_payer = await verify_payment_percall(x_payment, PRICE_SANITIZE_PERCALL, str(request.url))
         if not _valid:
             return JSONResponse(status_code=402, content={"status": "payment_verification_failed", "message": "x402 payment could not be verified."})
+        # Payment verified — skip TRIAL/tx_hash checks entirely, proceed straight to sanitization
 
+    # Validación básica
+    # Si no hay texto y no hay tx_hash → responder 402 para x402 discovery
     if not req.text or not req.text.strip():
         if not req.tx_hash or req.tx_hash.strip() == "":
             import base64, json as _json
@@ -2017,6 +2303,7 @@ async def sanitize(
             )
         return JSONResponse(status_code=200, content={"status": "empty_input"})
 
+    # ── Límite de caracteres por request ──────────────────────
     MAX_CHARS = 10000
     text_length = len(req.text)
 
@@ -2046,12 +2333,18 @@ async def sanitize(
             }
         )
 
+    # Fase 1: validar y normalizar context
     context = req.context.lower().strip() if req.context else "general"
     if context not in VALID_CONTEXTS:
-        context = "general"
+        context = "general"  # fallback silencioso — no rompe clientes existentes
 
     wallet = percall_payer or req.wallet_address or "anonymous"
 
+    # ── x402 Payment Protocol ─────────────────────────────
+    # If no tx_hash provided → return 402 with payment info
+    # This allows autonomous agents to discover payment terms
+    # and pay without human intervention (x402 standard)
+    # Skip this whole tx_hash/quota check if pay-per-call already verified the request.
     if not percall_payer and (not req.tx_hash or req.tx_hash.strip() == ""):
         return JSONResponse(
             status_code=402,
@@ -2086,6 +2379,8 @@ async def sanitize(
             }
         )
 
+    # ── Fase 2: verificar privacy budget ──────────────────
+    # El operator_id es la wallet. Sin wallet → sin budget (anónimo).
     budget_allowed, budget_info = await check_budget(wallet, context)
     if not budget_allowed:
         err = budget_info.get("error")
@@ -2099,6 +2394,7 @@ async def sanitize(
                     "budget": budget_info,
                 }
             )
+        # daily_limit_reached
         return JSONResponse(
             status_code=429,
             content={
@@ -2109,10 +2405,13 @@ async def sanitize(
             }
         )
 
+    # ── Modo pay-per-call (already verified above) ────────
+    # Skip TRIAL/quota/prepaid logic entirely — payment already confirmed via PayAI.
     if percall_payer:
         quota_remaining = None
         license_type = "Pay-per-call (x402)"
 
+    # ── Modo TRIAL ─────────────────────────────────────────
     elif req.tx_hash.upper() == "TRIAL":
         used = await get_trial_count(wallet)
         if used >= TRIAL_QUOTA:
@@ -2144,10 +2443,12 @@ async def sanitize(
         quota_remaining = TRIAL_QUOTA - (used + 1)
         license_type = "TRIAL"
 
+    # ── Modo PAGADO ────────────────────────────────────────
     else:
         tx_exists = await check_replay(req.tx_hash)
 
         if tx_exists:
+            # tx_hash ya verificado antes — solo contar uso
             paid_used = await get_paid_count(req.tx_hash)
             if paid_used >= PAID_QUOTA:
                 return JSONResponse(
@@ -2172,6 +2473,8 @@ async def sanitize(
             quota_remaining = PAID_QUOTA - (paid_used + 1)
 
         else:
+            # Primer uso de este tx_hash — verificar pago on-chain.
+            # ADDITIVE: route by network. Base tx = "0x"+64hex; Solana = base58 signature.
             _tx = (req.tx_hash or "").strip()
             _is_base = _tx.lower().startswith("0x") and len(_tx) == 66 and all(
                 c in "0123456789abcdef" for c in _tx[2:])
@@ -2199,28 +2502,34 @@ async def sanitize(
                         ]
                     }
                 )
+            # Pago verificado — registrar tx_hash
             await register_tx_hash(req.tx_hash)
             quota_remaining = PAID_QUOTA - 1
 
         await increment_paid(req.tx_hash)
         license_type = "Enterprise - 149 USDC"
 
+        # ── Fase 4: Proof of Sanitization on Solana ────────
+        # Fire-and-forget — never blocks the sanitization response
         import asyncio
         asyncio.create_task(
             anchor_proof_on_solana(
                 wallet=wallet,
-                score=0.0,
+                score=0.0,  # preliminary — updated after scoring
                 category="PENDING",
                 text_length=len(req.text)
             )
         )
 
-    result = await gpt_sanitize(req.text, context)
+    # ── Sanitización — Fase 1: pasar context ───────────────
+    result = await gpt_sanitize(req.text, context)  # ← context aquí
     if result.get("status") == "empty_input":
         return JSONResponse(status_code=200, content={"status": "empty_input"})
 
     model_cleaned = result.get("cleaned_text", "") or ""
 
+    # Normalize entity list: tolerate the model omitting it, returning a dict
+    # instead of a list, or returning entries with missing fields.
     raw_entities = result.get("entities")
     entities_list: list = []
     if isinstance(raw_entities, list):
@@ -2236,6 +2545,9 @@ async def sanitize(
                 "redacted_text": str(ent.get("redacted_text") or ""),
             })
 
+    # Detect failsafe path — the parser sets a single sanitizer_failsafe
+    # entity covering the whole input. Don't run the enforcer in that case;
+    # the failsafe `cleaned_text` is already "[REDACTED]".
     is_failsafe = (
         len(entities_list) == 1
         and entities_list[0].get("type") == "sanitizer_failsafe"
@@ -2252,19 +2564,27 @@ async def sanitize(
             entities=entities_list,
         )
 
+    # Server-side score — deterministic, computed from entity list.
     score, category = compute_score(entities_list)
     entities_removed = len(entities_list) > 0
 
+    # ── Audit trail — Fase 1: context / Fase 2: retorna id ─
     audit_id = await log_audit(
         req.tx_hash, len(req.text), sanitized, score, category,
         wallet, license_type, context
     )
 
+    # ── Fase 2: registrar consumo de budget ────────────────
     if budget_info.get("budget_active"):
         await register_budget_usage(wallet, context, audit_id)
+        # Actualizar remaining tras el consumo
         budget_info["remaining_today"] = max(0, budget_info.get("remaining_today", 1) - 1)
         budget_info["used_today"] = budget_info.get("used_today", 0) + 1
 
+    # ── Respuesta final ────────────────────────────────────
+    # Backwards-compatible. New fields (Fase 1): context_applied
+    # New fields (Fase 2): budget (solo si el operador tiene budget activo)
+    # Fase 4 — anchor on-chain para usuarios PAID
     solana_anchor = None
     if license_type != "TRIAL":
         try:
@@ -2274,6 +2594,7 @@ async def sanitize(
                 category=category,
                 text_length=len(req.text)
             )
+            # Guardar anchor en audit_log
             if solana_anchor and audit_id:
                 async with httpx.AsyncClient() as client:
                     await client.patch(
@@ -2334,6 +2655,7 @@ async def sanitize(
     )
 
 
+# ── v2.7 (aditivo): /sanitize/quick — x402 v2 pay-per-call UNICAMENTE ──────
 class QuickSanitizeRequest(BaseModel):
     text: Optional[str] = None
     context: str = "general"
@@ -2347,7 +2669,16 @@ async def sanitize_quick(
     payment_signature: Optional[str] = Header(default=None, alias="PAYMENT-SIGNATURE"),
     x_fluxa_secret: Optional[str] = Header(default=None, alias="X-FLUXA-SECRET"),
 ):
-    """POST /sanitize/quick — x402 v2 pay-per-call only."""
+    """POST /sanitize/quick — x402 v2 pay-per-call only ($0.01 USDC, Base
+    preferido, Solana alterno). No TRIAL, no tx_hash, no bundle prepago.
+    Reutiliza la misma logica de sanitizacion que /sanitize sin modificarla.
+
+    Aditivo: si llega X-FLUXA-SECRET valido, la llamada viene del proxy de
+    FluxA Monetize, que ya cobro y liquido el pago USDC antes de reenviar
+    esta request (FluxA elimina el header X-Payment antes de reenviar).
+    En ese caso se omite la verificacion x402 propia para evitar un doble
+    cobro / 402 espurio.
+    """
     x_payment = payment_signature or x_payment
     is_fluxa_proxied = bool(FLUXA_PROXY_SECRET) and x_fluxa_secret == FLUXA_PROXY_SECRET
 
@@ -2459,6 +2790,8 @@ async def sanitize_quick(
     )
 
 
+# ── Fase 2: Endpoint de consulta de budget ─────────────────
+
 @app.get("/budget/{operator_id}")
 async def get_budget_status(operator_id: str):
     """Consulta el estado del privacy budget de un operador."""
@@ -2494,6 +2827,8 @@ async def get_budget_status(operator_id: str):
     )
 
 
+# ── Fase 3: TrustBoost Score ───────────────────────────────
+
 async def fetch_wallet_score(wallet: str) -> dict | None:
     """Consulta la vista wallet_scores en Supabase para una wallet."""
     async with httpx.AsyncClient() as client:
@@ -2514,7 +2849,19 @@ async def fetch_wallet_score(wallet: str) -> dict | None:
 
 @app.get("/score/{wallet}")
 async def get_trustboost_score(wallet: str):
-    """Retorna el TrustBoost Score de un operador basado en su historial."""
+    """Retorna el TrustBoost Score de un operador basado en su historial.
+
+    El score (0.0 — 1.0) mide la confiabilidad del agente:
+    - Base: inverso del avg_safety_score (texto más limpio = score más alto)
+    - Penalización: proporción de requests CRITICAL
+    - Bonuses: volumen de historial, diversidad de contextos, antigüedad
+
+    Trust tiers:
+      TRUSTED  ≥ 0.80 — agente maduro, historial limpio
+      VERIFIED ≥ 0.60 — agente activo y confiable
+      ACTIVE   ≥ 0.40 — agente en uso, historial en construcción
+      NEW       < 0.40 — agente nuevo o sin historial suficiente
+    """
     if not wallet or wallet == "anonymous":
         return JSONResponse(
             status_code=400,
@@ -2569,6 +2916,8 @@ async def get_trustboost_score(wallet: str):
         }
     )
 
+# ── DEMO: rate limiting autónomo por IP ────────────────────
+
 DEMO_LIMIT_PER_HOUR = 3
 DEMO_MAX_CHARS = 500
 
@@ -2600,12 +2949,21 @@ class DemoRequest(BaseModel):
 
 @app.post("/demo")
 async def demo_sanitize(req: DemoRequest, request: Request):
-    """Public demo endpoint for Hugging Face Space and live demos."""
+    """
+    Public demo endpoint for Hugging Face Space and live demos.
+    - 3 requests per IP per hour — autonomous rate limiting
+    - Max 500 characters per request
+    - Always includes upgrade CTA toward TRIAL and paid
+    - No wallet, no tx_hash required
+    - Anti-abuse: IP hash stored, never raw IP
+    """
     import hashlib
 
+    # Hash the IP — never store raw IP
     raw_ip = request.client.host if request.client else "unknown"
     ip_hash = hashlib.sha256(raw_ip.encode()).hexdigest()[:16]
 
+    # Check rate limit
     count = await get_demo_count(ip_hash)
     remaining = max(0, DEMO_LIMIT_PER_HOUR - count)
 
@@ -2633,6 +2991,7 @@ async def demo_sanitize(req: DemoRequest, request: Request):
             }
         )
 
+    # Truncate to max chars
     text = req.text[:DEMO_MAX_CHARS]
     truncated = len(req.text) > DEMO_MAX_CHARS
 
@@ -2642,14 +3001,17 @@ async def demo_sanitize(req: DemoRequest, request: Request):
             content={"status": "error", "message": "Text cannot be empty"}
         )
 
+    # Call the LLM sanitizer using the real gpt_sanitize function
     try:
         result = await gpt_sanitize(text, context="general")
         entities_list = result.get("entities", [])
         sanitized = result.get("cleaned_text", "[REDACTED]")
 
+        # Server-side enforcement
         sanitized, _, entities_list = enforce_redaction(text, sanitized, entities_list)
         score, category = compute_score(entities_list)
 
+        # Log the demo request
         await increment_demo(ip_hash)
 
         new_remaining = remaining - 1
@@ -2691,666 +3053,10 @@ async def demo_sanitize(req: DemoRequest, request: Request):
             content={"status": "error", "message": "Sanitization failed — please try again"}
         )
 
-SCAN_LIMIT_PER_HOUR = 5
-
-async def get_scan_count(ip_hash: str) -> int:
-    async with httpx.AsyncClient() as client:
-        r = await client.get(
-            f"{SUPABASE_URL}/rest/v1/scan_requests",
-            headers=SUPABASE_HEADERS,
-            params={
-                "ip_hash": f"eq.{ip_hash}",
-                "created_at": f"gte.{(datetime.utcnow() - timedelta(hours=1)).isoformat()}",
-                "select": "id"
-            }
-        )
-        return len(r.json()) if r.status_code == 200 else 0
-
-async def increment_scan(ip_hash: str):
-    async with httpx.AsyncClient() as client:
-        await client.post(
-            f"{SUPABASE_URL}/rest/v1/scan_requests",
-            headers=SUPABASE_HEADERS,
-            json={"ip_hash": ip_hash}
-        )
-
-# ── Badge de confianza embebible — solo para escaneos 100% limpios ──
-# Inspirado en el badge de Snyk para librerías de código abierto: cada
-# embed es simultáneamente prueba de confianza para los visitantes de esa
-# app Y un link de vuelta a TrustBoost.
-
-async def register_clean_scan(app_url: str | None, tables_scanned: int) -> str | None:
-    """Registra un escaneo limpio y devuelve su scan_id (UUID), o None si falla."""
-    async with httpx.AsyncClient() as client:
-        r = await client.post(
-            f"{SUPABASE_URL}/rest/v1/badge_scans",
-            headers={**SUPABASE_SERVICE_HEADERS, "Prefer": "return=representation"},
-            json={"app_url": app_url, "tables_scanned": tables_scanned}
-        )
-        if r.status_code in (200, 201):
-            rows = r.json()
-            if rows and isinstance(rows, list):
-                return rows[0].get("scan_id")
-        else:
-            print(f"[register_clean_scan] FALLÓ: status={r.status_code} body={r.text[:300]}")
-        return None
-
-
-async def get_badge_scan(scan_id: str) -> dict | None:
-    async with httpx.AsyncClient() as client:
-        r = await client.get(
-            f"{SUPABASE_URL}/rest/v1/badge_scans",
-            headers=SUPABASE_SERVICE_HEADERS,
-            params={"scan_id": f"eq.{scan_id}", "select": "*", "limit": "1"}
-        )
-        if r.status_code == 200:
-            rows = r.json()
-            return rows[0] if rows else None
-        return None
-
-
-BADGE_SVG_TEMPLATE = """<svg xmlns="http://www.w3.org/2000/svg" width="176" height="20" role="img" aria-label="TrustBoost: Verified Secure">
-  <linearGradient id="s" x2="0" y2="100%">
-    <stop offset="0" stop-color="#bbb" stop-opacity=".1"/>
-    <stop offset="1" stop-opacity=".1"/>
-  </linearGradient>
-  <clipPath id="r"><rect width="176" height="20" rx="3" fill="#fff"/></clipPath>
-  <g clip-path="url(#r)">
-    <rect width="83" height="20" fill="#1a1a2e"/>
-    <rect x="83" width="93" height="20" fill="#16a34a"/>
-    <rect width="176" height="20" fill="url(#s)"/>
-  </g>
-  <g fill="#fff" text-anchor="middle" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" font-size="11">
-    <text x="41.5" y="14">TrustBoost</text>
-    <text x="129.5" y="14">Verified Secure</text>
-  </g>
-</svg>"""
-
-BADGE_SVG_ISSUES_TEMPLATE = """<svg xmlns="http://www.w3.org/2000/svg" width="176" height="20" role="img" aria-label="TrustBoost: Not Verified">
-  <clipPath id="r"><rect width="176" height="20" rx="3" fill="#fff"/></clipPath>
-  <g clip-path="url(#r)">
-    <rect width="83" height="20" fill="#1a1a2e"/>
-    <rect x="83" width="93" height="20" fill="#525252"/>
-  </g>
-  <g fill="#fff" text-anchor="middle" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" font-size="11">
-    <text x="41.5" y="14">TrustBoost</text>
-    <text x="129.5" y="14">Scan Expired</text>
-  </g>
-</svg>"""
-
-
-@app.get("/badge/{scan_id}.svg", include_in_schema=False)
-async def badge_svg(scan_id: str):
-    scan = await get_badge_scan(scan_id)
-    svg = BADGE_SVG_TEMPLATE if scan else BADGE_SVG_ISSUES_TEMPLATE
-    return Response(
-        content=svg,
-        media_type="image/svg+xml",
-        headers={"Cache-Control": "public, max-age=3600"},
-    )
-
-
-@app.get("/verified/{scan_id}", include_in_schema=False)
-async def verified_page(scan_id: str):
-    scan = await get_badge_scan(scan_id)
-    if not scan:
-        html = """<!DOCTYPE html><html><head><title>Scan not found — TrustBoost</title></head>
-<body style="font-family:sans-serif; background:#0d0d12; color:#e5e5e5; text-align:center; padding:80px 20px;">
-<h1>This verification link doesn't exist</h1>
-<p><a href="https://api.trustboost.dev/free-scan" style="color:#16a34a;">Run your own free scan →</a></p>
-</body></html>"""
-        return HTMLResponse(content=html, status_code=404)
-
-    app_label = scan.get("app_url") or "This Supabase project"
-    created = scan.get("created_at", "")[:10]
-    tables = scan.get("tables_scanned", 0)
-
-    html = f"""<!DOCTYPE html><html><head>
-<meta charset="UTF-8"><title>Verified by TrustBoost</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-  body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background:#0d0d12; color:#e5e5e5; margin:0; padding:60px 20px; text-align:center; }}
-  .card {{ max-width: 480px; margin: 0 auto; border:1px solid #2a2a35; border-radius:14px; padding:40px 30px; background:#14141c; }}
-  .badge {{ font-size:0.8rem; letter-spacing:0.05em; color:#16a34a; font-weight:600; text-transform:uppercase; }}
-  h1 {{ font-size:1.4rem; margin:14px 0 8px; }}
-  p {{ color:#a0a0ab; font-size:0.92rem; line-height:1.5; }}
-  a.cta {{ display:inline-block; margin-top:24px; padding:12px 24px; background:#16a34a; color:#fff; text-decoration:none; border-radius:8px; font-weight:600; }}
-</style>
-</head><body>
-<div class="card">
-  <div class="badge">✓ Verified Secure</div>
-  <h1>{app_label}</h1>
-  <p>Scanned by TrustBoost on {created}. {tables} common tables were checked for public read access with no authentication — none were found exposed at scan time.</p>
-  <p style="font-size:0.8rem; color:#6b6b75;">This reflects a point-in-time scan, not a certified audit or ongoing guarantee.</p>
-  <a class="cta" href="https://api.trustboost.dev/free-scan">Scan your own app free →</a>
-</div>
-</body></html>"""
-    return HTMLResponse(content=html)
-
-
-class ScanRequest(BaseModel):
-    project_url: str
-    anon_key: str
-    app_url: str | None = None
-from fastapi.responses import HTMLResponse
-
-@app.get("/free-scan", include_in_schema=False)
-async def free_scan_page():
-    with open("scan-landing.html", "r", encoding="utf-8") as f:
-        return HTMLResponse(content=f.read())
-
-# ── SEO pages (búsqueda de miedo) — una sola ruta para todas ──
-from seo_pages_data import SEO_PAGES
-
-@app.get("/check/{slug}", include_in_schema=False)
-async def seo_check_page(slug: str):
-    data = SEO_PAGES.get(slug)
-    if not data:
-        raise HTTPException(404, "page not found")
-    with open("seo-template.html", "r", encoding="utf-8") as f:
-        template = f.read()
-    html = (
-        template
-        .replace("__PAGE_TITLE__", data["title"])
-        .replace("__META_DESCRIPTION__", data["meta_description"])
-        .replace("__HERO_H1__", data["hero_h1"])
-        .replace("__HERO_LEDE__", data["hero_lede"])
-        .replace("__FAQ_HEADING__", data["faq_heading"])
-        .replace("__FAQ_ITEMS__", data["faq_items"])
-    )
-    return HTMLResponse(content=html)
-
-
-@app.post("/scan")
-async def scan_endpoint(req: ScanRequest, request: Request):
-    import hashlib
-    raw_ip = request.client.host if request.client else "unknown"
-    ip_hash = hashlib.sha256(raw_ip.encode()).hexdigest()[:16]
-
-    count = await get_scan_count(ip_hash)
-    if count >= SCAN_LIMIT_PER_HOUR:
-        return JSONResponse(
-            status_code=429,
-            content={"status": "scan_limit_reached",
-                      "message": f"Límite de {SCAN_LIMIT_PER_HOUR} escaneos/hora alcanzado. Vuelve en un rato."}
-        )
-
-    if not req.project_url.startswith("https://") or ".supabase.co" not in req.project_url:
-        return JSONResponse(status_code=400, content={"status": "error", "message": "URL de proyecto Supabase inválida"})
-
-    from supabase_scanner import scan_project
-    report = await scan_project(req.project_url, req.anon_key, app_url=req.app_url)
-    await increment_scan(ip_hash)
-
-    is_fully_clean = (
-        report.overall_severity == "OK"
-        and not report.service_role_leak
-        and not report.public_storage_buckets
-    )
-    badge_scan_id = None
-    if is_fully_clean:
-        badge_scan_id = await register_clean_scan(req.app_url, report.tables_discovered)
-
-    return {
-        "status": "success",
-        "project_url": report.project_url,
-        "overall_severity": report.overall_severity,
-        "tables_discovered": report.tables_discovered,
-        "tables_with_leak": len(report.findings),
-        "public_storage_buckets": report.public_storage_buckets,
-        "service_role_leak": report.service_role_leak,
-        "service_role_leak_source": report.service_role_leak_source,
-        "missing_security_headers": report.missing_security_headers,
-        "has_dmarc": report.has_dmarc,
-        "badge_scan_id": badge_scan_id,
-        "details": [
-            {
-                "table": f.table_name,
-                "severity": f.severity,
-                "pii_category": f.pii_category,
-                "rows_exposed_sample": f.sample_rows_returned,
-            }
-            for f in report.findings
-        ],
-    }
-
-# ── Paid detailed report (AI-generated) ───────────────────
-class CardReportRequest(BaseModel):
-    checkout_id: str
-    project_url: str
-    anon_key: str
-    app_url: str | None = None
-
-@app.post("/report")
-async def report_endpoint(req: CardReportRequest, request: Request):
-    import hashlib
-    raw_ip = request.client.host if request.client else "unknown"
-    ip_hash = hashlib.sha256(raw_ip.encode()).hexdigest()[:16]
-
-    count = await get_scan_count(ip_hash)
-    if count >= SCAN_LIMIT_PER_HOUR:
-        return JSONResponse(
-            status_code=429,
-            content={"status": "scan_limit_reached",
-                      "message": f"Límite de {SCAN_LIMIT_PER_HOUR} escaneos/hora alcanzado. Vuelve en un rato."}
-        )
-
-    # Verificación real del pago — dos capas, sin condición de carrera:
-    # 1) primero se le pregunta DIRECTO a la API de Polar si el checkout
-    #    ya se pagó (patrón oficial de Polar para páginas de retorno —
-    #    no depende de esperar a que un webhook haya llegado a tiempo).
-    # 2) si por algún motivo la API de Polar no responde, se usa como
-    #    respaldo lo que el webhook ya haya guardado en Supabase.
-    existing_payment = await get_polar_payment_by_checkout_id(req.checkout_id)
-    if existing_payment and existing_payment.get("used"):
-        return JSONResponse(status_code=409, content={
-            "status": "error",
-            "message": "This payment was already used to generate a report."
-        })
-
-    live_status = await check_polar_checkout_status(req.checkout_id)
-    is_paid = live_status == "succeeded"
-
-    if not is_paid:
-        # Respaldo: quizás el webhook ya lo confirmó aunque la consulta
-        # directa haya fallado por algún motivo puntual.
-        is_paid = bool(existing_payment and existing_payment.get("status") == "paid")
-
-    if not is_paid:
-        message = "We couldn't confirm this payment yet. If you just paid, wait a few seconds and try again — Polar can take a moment to notify us."
-        if live_status == "confirmed":
-            message = "Your payment is still processing — try again in a few seconds."
-        elif live_status == "failed":
-            message = "This payment failed or was not completed."
-        return JSONResponse(status_code=402, content={"status": "error", "message": message})
-
-    if not req.project_url.startswith("https://") or ".supabase.co" not in req.project_url:
-        return JSONResponse(status_code=400, content={"status": "error", "message": "URL de proyecto Supabase inválida"})
-
-    from supabase_scanner import scan_project
-    from report_generator import generate_report
-
-    await mark_polar_payment_used(req.checkout_id)
-
-    report = await scan_project(req.project_url, req.anon_key, app_url=req.app_url)
-    await increment_scan(ip_hash)
-
-    ai_report = await generate_report(report, openai_client)
-
-    report_id = await save_paid_report(
-        project_url=report.project_url,
-        overall_severity=report.overall_severity,
-        overall_summary=ai_report.get("overall_summary", ""),
-        findings=ai_report.get("findings", []),
-        payment_line=f"Paid via card, processed by Polar — checkout {req.checkout_id}",
-    )
-
-    return {
-        "status": "success",
-        "project_url": report.project_url,
-        "overall_severity": report.overall_severity,
-        "overall_summary": ai_report.get("overall_summary", ""),
-        "findings": ai_report.get("findings", []),
-        "report_id": report_id,
-        "report_url": f"https://api.trustboost.dev/report/{report_id}" if report_id else None,
-    }
-# ── Detailed Report paid via USDC on Base ─────────────────
-class UsdcReportRequest(BaseModel):
-    tx_hash: str
-    project_url: str
-    anon_key: str
-    app_url: str | None = None
-
-REPORT_PRICE_USDC = "49"
-
-async def is_hash_used(tx_hash: str) -> bool:
-    async with httpx.AsyncClient() as client:
-        r = await client.get(
-            f"{SUPABASE_URL}/rest/v1/usdc_used_hashes",
-            headers=SUPABASE_HEADERS,
-            params={"tx_hash": f"eq.{tx_hash}", "select": "tx_hash"}
-        )
-        return len(r.json()) > 0 if r.status_code == 200 else False
-
-async def mark_hash_used(tx_hash: str):
-    async with httpx.AsyncClient() as client:
-        await client.post(
-            f"{SUPABASE_URL}/rest/v1/usdc_used_hashes",
-            headers=SUPABASE_HEADERS,
-            json={"tx_hash": tx_hash}
-        )
-
-# ── Pagos con tarjeta vía Polar — webhook + verificación ──────────
-# Antes de esto, /report no verificaba ningún pago — cualquiera podía
-# llamarlo directo y recibir el reporte gratis. Se corrige con el
-# mismo principio que ya usa USDC: nunca confiar en lo que dice el
-# navegador, solo en lo que confirma la fuente de verdad (aquí, un
-# webhook firmado por Polar) — y marcar cada pago como usado una sola
-# vez, para que no se pueda reutilizar el mismo order_id dos veces.
-
-async def store_polar_payment(order_id: str, checkout_id: str, status: str):
-    async with httpx.AsyncClient() as client:
-        r = await client.post(
-            f"{SUPABASE_URL}/rest/v1/polar_payments",
-            headers={**SUPABASE_SERVICE_HEADERS, "Prefer": "resolution=merge-duplicates"},
-            json={"order_id": order_id, "checkout_id": checkout_id, "status": status}
-        )
-        if r.status_code not in (200, 201, 204):
-            print(f"[store_polar_payment] FALLÓ: status={r.status_code} body={r.text[:300]}")
-
-async def get_polar_payment_by_checkout_id(checkout_id: str) -> dict | None:
-    async with httpx.AsyncClient() as client:
-        r = await client.get(
-            f"{SUPABASE_URL}/rest/v1/polar_payments",
-            headers=SUPABASE_SERVICE_HEADERS,
-            params={"checkout_id": f"eq.{checkout_id}", "select": "*", "limit": "1"}
-        )
-        if r.status_code == 200:
-            rows = r.json()
-            return rows[0] if rows else None
-        return None
-
-async def mark_polar_payment_used(checkout_id: str):
-    async with httpx.AsyncClient() as client:
-        # POST con "merge-duplicates" en vez de PATCH — si el webhook
-        # nunca llegó a guardar esta fila (posible ahora que la
-        # verificación principal ya no depende de él), esto la crea;
-        # si ya existía, la actualiza. checkout_id es único, así que
-        # nunca duplica.
-        r = await client.post(
-            f"{SUPABASE_URL}/rest/v1/polar_payments",
-            headers={**SUPABASE_SERVICE_HEADERS, "Prefer": "resolution=merge-duplicates"},
-            json={"checkout_id": checkout_id, "status": "paid", "used": True}
-        )
-        if r.status_code not in (200, 201, 204):
-            print(f"[mark_polar_payment_used] FALLÓ: status={r.status_code} body={r.text[:300]}")
-
-# ── Verificación directa contra la API de Polar — patrón oficial ──────
-# En vez de depender solo del webhook (que puede tardar más que el
-# regreso del navegador — es una condición de carrera), la página de
-# retorno pregunta DIRECTO a Polar "¿este checkout ya se pagó?", tal
-# como lo documenta Polar en su propia guía oficial para páginas de
-# éxito. Elimina la espera por completo.
-
-async def check_polar_checkout_status(checkout_id: str) -> str | None:
-    """Consulta el estado real de un checkout directo en la API de
-    Polar. Devuelve 'succeeded', 'confirmed', 'failed', 'open', u otro
-    valor de estado — o None si no se pudo consultar."""
-    if not POLAR_ACCESS_TOKEN:
-        print("[check_polar_checkout_status] POLAR_ACCESS_TOKEN no está configurado")
-        return None
-    async with httpx.AsyncClient() as client:
-        r = await client.get(
-            f"https://api.polar.sh/v1/checkouts/{checkout_id}",
-            headers={"Authorization": f"Bearer {POLAR_ACCESS_TOKEN}"},
-            timeout=10,
-        )
-        if r.status_code == 200:
-            estado = r.json().get("status")
-            print(f"[check_polar_checkout_status] checkout_id={checkout_id} status={estado}")
-            return estado
-        print(f"[check_polar_checkout_status] FALLÓ: checkout_id={checkout_id} http_status={r.status_code} body={r.text[:300]}")
-        return None
-
-
-@app.post("/webhooks/polar", include_in_schema=False)
-async def polar_webhook(request: Request):
-    """Recibe la confirmación de pago de Polar — firmada, así que
-    nadie puede falsificarla. Esta es la única fuente de verdad de si
-    un pago con tarjeta realmente ocurrió; el navegador nunca decide
-    esto por sí solo.
-
-    NOTA TÉCNICA: se usa `standardwebhooks.Webhook` directamente, en vez
-    de `polar_sdk.webhooks.validate_event`. Esa función de polar-sdk
-    codifica el secreto en base64 ANTES de dárselo a Webhook(), pero
-    Webhook() ya espera el secreto con el prefijo "whsec_" tal cual lo
-    entrega Polar — al pasar por polar-sdk primero, el prefijo termina
-    metido dentro de la llave criptográfica en vez de quitarse, y la
-    firma nunca coincide. Usando Webhook() directo, con el secreto sin
-    tocar, el prefijo se detecta y se quita en el lugar correcto."""
-    from standardwebhooks.webhooks import Webhook, WebhookVerificationError
-
-    body = await request.body()
-
-    incoming_headers = {k.lower(): v for k, v in request.headers.items()}
-    has_id = "webhook-id" in incoming_headers
-    has_ts = "webhook-timestamp" in incoming_headers
-    has_sig = "webhook-signature" in incoming_headers
-    print(f"[polar_webhook] headers recibidos: webhook-id={has_id} webhook-timestamp={has_ts} webhook-signature={has_sig} | todos los headers: {list(incoming_headers.keys())}")
-
-    try:
-        webhook = Webhook(POLAR_WEBHOOK_SECRET)
-        data = webhook.verify(body, dict(request.headers))
-    except WebhookVerificationError as e:
-        print(f"[polar_webhook] WebhookVerificationError: {str(e)}")
-        return JSONResponse(status_code=403, content={"error": "invalid signature", "detail": str(e)})
-    except Exception as e:
-        print(f"[polar_webhook] error de verificación: {type(e).__name__}: {str(e)[:200]}")
-        return JSONResponse(status_code=400, content={"error": "malformed webhook"})
-
-    event_type = data.get("type", "")
-    if event_type == "order.paid":
-        order_data = data.get("data", {})
-        order_id = order_data.get("id", "")
-        checkout_id = order_data.get("checkout_id", "")
-        print(f"[polar_webhook] order.paid recibido: order_id={order_id} checkout_id={checkout_id}")
-        await store_polar_payment(order_id, checkout_id, "paid")
-    else:
-        print(f"[polar_webhook] evento recibido pero ignorado (no es order.paid): {event_type}")
-
-    return JSONResponse(content={"received": True})
-
-# ── Persistencia de reportes pagados ───────────────────────
-# Antes, el reporte solo existía en la memoria del navegador — si la
-# persona cerraba la pestaña sin descargarlo, lo perdía para siempre.
-# Ahora cada reporte pagado se guarda con un ID permanente, y el PDF
-# se genera en el servidor (xhtml2pdf), no en el navegador — nunca más
-# depende de "fotografiar" la página con html2canvas.
-
-async def save_paid_report(project_url: str, overall_severity: str,
-                            overall_summary: str, findings: list,
-                            payment_line: str) -> str | None:
-    async with httpx.AsyncClient() as client:
-        r = await client.post(
-            f"{SUPABASE_URL}/rest/v1/paid_reports",
-            headers={**SUPABASE_SERVICE_HEADERS, "Prefer": "return=representation"},
-            json={
-                "project_url": project_url,
-                "overall_severity": overall_severity,
-                "overall_summary": overall_summary,
-                "findings": findings,
-                "payment_line": payment_line,
-            }
-        )
-        if r.status_code in (200, 201):
-            rows = r.json()
-            if rows and isinstance(rows, list):
-                return rows[0].get("report_id")
-        else:
-            print(f"[save_paid_report] FALLÓ: status={r.status_code} body={r.text[:300]}")
-        return None
-
-
-async def get_paid_report(report_id: str) -> dict | None:
-    async with httpx.AsyncClient() as client:
-        r = await client.get(
-            f"{SUPABASE_URL}/rest/v1/paid_reports",
-            headers=SUPABASE_SERVICE_HEADERS,
-            params={"report_id": f"eq.{report_id}", "select": "*", "limit": "1"}
-        )
-        if r.status_code == 200:
-            rows = r.json()
-            return rows[0] if rows else None
-        return None
-
-
-@app.get("/report/{report_id}", include_in_schema=False)
-async def view_saved_report(report_id: str):
-    saved = await get_paid_report(report_id)
-    if not saved:
-        return HTMLResponse(
-            content="<h1 style='font-family:sans-serif; text-align:center; margin-top:80px;'>Report not found</h1>",
-            status_code=404,
-        )
-    from report_pdf import build_report_html
-    generated_at = (saved.get("created_at") or "")[:10]
-    html = build_report_html(
-        report_id=report_id,
-        project_url=saved.get("project_url", ""),
-        overall_severity=saved.get("overall_severity", ""),
-        overall_summary=saved.get("overall_summary", ""),
-        findings=saved.get("findings") or [],
-        generated_at=generated_at,
-        payment_line=saved.get("payment_line", ""),
-    )
-    download_link = f'<div style="max-width:820px; margin:20px auto 0; font-family:Arial,sans-serif;"><a href="/report/{report_id}/pdf" style="display:inline-block; padding:10px 20px; background:#a8842c; color:#fff; text-decoration:none; border-radius:6px; font-weight:bold;">Download PDF</a></div>'
-    html = html.replace("<body>", "<body>" + download_link, 1)
-    return HTMLResponse(content=html)
-
-
-@app.get("/report/{report_id}/pdf", include_in_schema=False)
-async def download_saved_report_pdf(report_id: str):
-    saved = await get_paid_report(report_id)
-    if not saved:
-        return JSONResponse(status_code=404, content={"status": "error", "message": "Report not found"})
-    from report_pdf import build_report_html, generate_pdf_bytes
-    generated_at = (saved.get("created_at") or "")[:10]
-    html = build_report_html(
-        report_id=report_id,
-        project_url=saved.get("project_url", ""),
-        overall_severity=saved.get("overall_severity", ""),
-        overall_summary=saved.get("overall_summary", ""),
-        findings=saved.get("findings") or [],
-        generated_at=generated_at,
-        payment_line=saved.get("payment_line", ""),
-    )
-    pdf_bytes = generate_pdf_bytes(html)
-    return Response(
-        content=pdf_bytes,
-        media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{report_id}-trustboost-report.pdf"'},
-    )
-
-@app.post("/report-usdc")
-async def report_usdc_endpoint(req: UsdcReportRequest):
-    from usdc_verify import verify_base_usdc_payment
-
-    if await is_hash_used(req.tx_hash):
-        return JSONResponse(status_code=409, content={"status": "error", "message": "Este pago ya fue usado para generar un reporte."})
-
-    payment = await verify_base_usdc_payment(req.tx_hash, expected_recipient=WALLET_BASE, expected_amount=REPORT_PRICE_USDC)
-    if not payment["ok"]:
-        return JSONResponse(status_code=422, content={"status": "error", "message": payment["reason"]})
-
-    await mark_hash_used(req.tx_hash)
-
-    if not req.project_url.startswith("https://") or ".supabase.co" not in req.project_url:
-        return JSONResponse(status_code=400, content={"status": "error", "message": "URL de proyecto Supabase inválida"})
-
-    from supabase_scanner import scan_project
-    from report_generator import generate_report
-
-    report = await scan_project(req.project_url, req.anon_key, app_url=req.app_url)
-    ai_report = await generate_report(report, openai_client)
-
-    report_id = await save_paid_report(
-        project_url=report.project_url,
-        overall_severity=report.overall_severity,
-        overall_summary=ai_report.get("overall_summary", ""),
-        findings=ai_report.get("findings", []),
-        payment_line=f"Paid via USDC on Base — tx {req.tx_hash[:10]}...{req.tx_hash[-6:]}",
-    )
-
-    return {
-        "status": "success",
-        "project_url": report.project_url,
-        "overall_severity": report.overall_severity,
-        "overall_summary": ai_report.get("overall_summary", ""),
-        "findings": ai_report.get("findings", []),
-        "report_id": report_id,
-        "report_url": f"https://api.trustboost.dev/report/{report_id}" if report_id else None,
-    }
-
-# ── Research batch mode — free, admin-only, for your own market research ──
-ADMIN_SECRET = os.getenv("ADMIN_SECRET", "")
-
-class ResearchBatchRequest(BaseModel):
-    urls: List[str]
-
-def _check_admin(request: Request):
-    if not ADMIN_SECRET or request.headers.get("X-Admin-Secret") != ADMIN_SECRET:
-        raise HTTPException(403, "forbidden")
-
-async def store_research_scan(row: dict):
-    async with httpx.AsyncClient() as client:
-        await client.post(
-            f"{SUPABASE_URL}/rest/v1/research_scans",
-            headers=SUPABASE_HEADERS,
-            json=row
-        )
-
-@app.post("/admin/scan-batch")
-async def admin_scan_batch(req: ResearchBatchRequest, request: Request):
-    _check_admin(request)
-
-    from discover_credentials import discover_supabase_credentials
-    from supabase_scanner import scan_project
-
-    results = []
-    for homepage in req.urls:
-        creds = await discover_supabase_credentials(homepage)
-        if not creds:
-            results.append({"homepage": homepage, "status": "not_found"})
-            continue
-
-        report = await scan_project(creds["project_url"], creds["anon_key"])
-        row = {
-            "homepage": homepage,
-            "project_url": report.project_url,
-            "tables_discovered": report.tables_discovered,
-            "tables_with_leak": len(report.findings),
-            "overall_severity": report.overall_severity,
-            "public_storage_buckets": report.public_storage_buckets,
-            "findings": [
-                {"table": f.table_name, "severity": f.severity, "pii_category": f.pii_category, "rows": f.sample_rows_returned}
-                for f in report.findings
-            ],
-        }
-        await store_research_scan(row)
-        results.append({"homepage": homepage, "status": "scanned", **row})
-
-    return {"status": "success", "count": len(results), "results": results}
-
-
-@app.get("/admin/research-stats")
-async def admin_research_stats(request: Request):
-    _check_admin(request)
-
-    async with httpx.AsyncClient() as client:
-        r = await client.get(
-            f"{SUPABASE_URL}/rest/v1/research_scans",
-            headers=SUPABASE_HEADERS,
-            params={"select": "*"}
-        )
-        rows = r.json() if r.status_code == 200 else []
-
-    total = len(rows)
-    with_leak = sum(1 for row in rows if (row.get("tables_with_leak") or 0) > 0)
-    critical = sum(1 for row in rows if row.get("overall_severity") == "CRITICAL")
-    private = sum(1 for row in rows if row.get("overall_severity") == "PRIVATE")
-    total_tables_exposed = sum(row.get("tables_with_leak") or 0 for row in rows)
-
-    return {
-        "total_scanned": total,
-        "with_at_least_one_leak": with_leak,
-        "pct_with_leak": round(with_leak / total * 100, 1) if total else 0,
-        "critical_count": critical,
-        "private_count": private,
-        "avg_tables_exposed_per_app": round(total_tables_exposed / total, 2) if total else 0,
-        "raw": rows,
-    }
 
 # ── Alias endpoints — agent-friendly naming ───────────────
+# Agents infer endpoint names from capability descriptions.
+# These aliases capture that traffic and redirect to core endpoints.
 
 @app.post("/redact")
 async def redact(
@@ -3363,9 +3069,15 @@ async def redact(
     return await sanitize(req, request, x_payment=x_payment, payment_signature=payment_signature)
 
 @app.post("/detect")
-async def detect(req: DemoRequest, request: Request):
-    """Alias for /demo — captures agents that infer endpoint names."""
-    return await demo_sanitize(req, request)
+async def detect(
+    req: SanitizeRequest,
+    request: Request,
+    x_payment: Optional[str] = Header(default=None, alias="X-PAYMENT"),
+    payment_signature: Optional[str] = Header(default=None, alias="PAYMENT-SIGNATURE"),
+):
+    """Alias for /sanitize (paid, same as /redact) — it is advertised as a paid x402
+    endpoint (402 probes, Bazaar/402index). For the free preview use /demo or /sanitize/preview."""
+    return await sanitize(req, request, x_payment=x_payment, payment_signature=payment_signature)
 
 @app.get("/anchor/{anchor_tx}")
 async def anchor_verify(anchor_tx: str):
@@ -3492,9 +3204,20 @@ async def openapi_json():
     }
 
 
+# ── ANP Agent Description — Agent Network Protocol discovery ──
+# Publishes TrustBoost capabilities in ANP/JSON-LD format.
+# Crawleable by any ANP-aware agent at /.well-known/agent-description.json
+# Enables zero-human-intervention M2M discovery across the agent network.
+
 @app.get("/.well-known/agent-description.json")
 async def anp_agent_description():
-    """ANP Agent Description Document — RFC 8615 well-known URI."""
+    """ANP Agent Description Document — RFC 8615 well-known URI.
+    
+    Enables autonomous agent discovery via Agent Network Protocol (ANP).
+    Any agent crawling the network finds TrustBoost capabilities,
+    endpoints, payment tiers, trust score, and Proof of Sanitization
+    without human intervention or manual configuration.
+    """
     return {
         "@context": [
             "https://www.w3.org/ns/did/v1",
@@ -3631,6 +3354,10 @@ async def anp_agent_description():
         }
     }
 
+
+# ── Agent discoverability endpoints ───────────────────────
+# These endpoints improve AI crawler and agent discovery scores.
+# All are static GET endpoints — zero impact on sanitization logic.
 
 @app.get("/", response_class=None, include_in_schema=False)
 async def homepage():
@@ -3992,6 +3719,10 @@ curl -X POST https://api.trustboost.dev/sanitize/preview \\
 """, media_type="text/markdown")
 
 
+# ── Buyer-agent preflight endpoints ───────────────────────
+# These endpoints satisfy autonomous buyer-agent evaluation protocols
+# before wallet authorization. Zero impact on sanitization logic.
+
 @app.get("/policy", include_in_schema=False)
 async def policy():
     """Policy hash — allows agents to verify terms haven't changed since evaluation."""
@@ -4053,21 +3784,7 @@ async def x402_well_known():
     from fastapi.responses import JSONResponse, Response
     return JSONResponse({
         "x402Version": 2,
-        "accepts": [
-            {
-                "scheme": "exact",
-                "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
-                "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-                "decimals": 6,
-                "amount": "149000000",
-                "payTo": "giu4VciTkfWJNG1oeP6SzHEJwmabikJSMB91GaFNWE4",
-                "maxTimeoutSeconds": 300,
-                "extra": {
-                    "name": "USD Coin",
-                    "symbol": "USDC"
-                }
-            }
-        ],
+        "accepts": X402_PAYMENT_INFO["accepts"],
         "resource": {
             "url": "https://api.trustboost.dev/sanitize",
             "description": "PII sanitization with Proof of Sanitization on Solana",
@@ -4094,20 +3811,27 @@ async def x402_well_known_no_ext():
 
 
 @app.post("/trustboost-pii-sanitizer", include_in_schema=False)
-async def trustboost_skill_alias(request: Request):
-    """Alias for /sanitize — captures agents calling by ClawHub skill name."""
-    from fastapi import Request
-    body = await request.json()
-    from fastapi.responses import JSONResponse, Response
-    import httpx
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            "http://localhost:10000/sanitize",
-            json=body,
-            timeout=60
-        )
-        return JSONResponse(content=resp.json(), status_code=resp.status_code)
+async def trustboost_skill_alias(
+    request: Request,
+    x_payment: Optional[str] = Header(default=None, alias="X-PAYMENT"),
+    payment_signature: Optional[str] = Header(default=None, alias="PAYMENT-SIGNATURE"),
+):
+    """Alias for /sanitize — captures agents calling by ClawHub skill name.
+    Dispatches in-process (keeps payment headers; no loopback HTTP call)."""
+    try:
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise ValueError("body must be a JSON object")
+        req = SanitizeRequest(**body)
+    except Exception:
+        return JSONResponse(status_code=422, content={
+            "status": "invalid_request",
+            "message": "Body must be a JSON object, e.g. {\"text\": \"...\", \"tx_hash\": \"TRIAL\", \"wallet_address\": \"your-agent-id\"}.",
+        })
+    return await sanitize(req, request, x_payment=x_payment, payment_signature=payment_signature)
 
+
+# ── Discovery aliases — crawlers and agents looking for standard endpoints ──
 
 @app.get("/agents.txt", include_in_schema=False)
 async def agents_txt():
@@ -4172,6 +3896,8 @@ async def agent_directory_root():
     return RedirectResponse(url="/.well-known/agent-card.json", status_code=301)
 
 
+# ── Visual assets and Glama discovery ─────────────────────────────────────────
+
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon():
     """Favicon redirect — marketplace crawlers look for this."""
@@ -4199,6 +3925,9 @@ async def logo():
     )
 
 
+# ──────────────────────────────────────────────────────────────
+# FASE A (aditivo): pricing — NO toca el core
+# ──────────────────────────────────────────────────────────────
 @app.get("/pricing", include_in_schema=False)
 async def pricing():
     """Machine-readable pricing table for autonomous agent discovery."""

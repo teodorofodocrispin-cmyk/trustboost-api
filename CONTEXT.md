@@ -1011,3 +1011,48 @@ de GitHub ya hechos con autorización explícita en sesiones anteriores.
 **Estado**: pendiente de respuesta de NirDiamant. Es el resultado más
 cercano a una conversación de ingreso real que ha producido cualquier
 trabajo de TrustBoost hasta la fecha.
+
+---
+
+## Sesión 2026-10-28 — Restauración del núcleo PII (rama `restore/pii-core`)
+
+### Contexto
+Tras el pivot a "vibe-code scanner" (commits posteriores a `bf7936a`) se limpió el repo a mano
+(`4810cd4` eliminó comentarios/docstrings). Se pidió devolver el código al estado original y
+restaurar la operatividad completa de TrustBoost PII Sanitizer.
+
+### Qué se hizo
+- `main.py` restaurado a `bf7936a` (pre-pivot, con comentarios). Comprobado por AST (sin docstrings)
+  que el núcleo PII de HEAD era funcionalmente idéntico; lo único que se pierde son las rutas del scanner.
+- Scanner archivado, no borrado: `docs/archive/` (+ `git show 57dbb2b:supabase_scanner.py`).
+  Rutas que desaparecen al desplegar: `/free-scan`, `/check/*`, `/scan`, `/report*`, `/badge/*`,
+  `/verified/*`, `/webhooks/polar`, `/admin/*`.
+- `requirements.txt`: dependencias originales (`openai==1.57.0`, `httpx==0.28.1` — el par desplegado), sin `xhtml2pdf` ni `polar-sdk`.
+
+### Bugs encontrados y corregidos
+1. **Middleware x402 discovery (Fix 7, 2026-07-16, `47fb9c0`) bloqueaba TRIAL y bundle prepago**:
+   devolvía 402 a TODO request sin header de pago, incluso POST con body `tx_hash=TRIAL`/prepago.
+   Ahora solo intercepta sondeos (GET/HEAD o POST sin body); POST con body llega al handler.
+   Este es el origen de los 402 de Usetested en `/sanitize/quick`, `/redact`, `/detect` y del
+   rating CAUTION. (Los tests de integración fallaban desde ese commit.)
+2. `/trustboost-pii-sanitizer` (alias ClawHub): hacía loopback HTTP a `localhost:10000` sin headers
+   de pago ni manejo de JSON inválido. Ahora despacha en proceso a `sanitize()` y valida el body (422).
+3. `anchor_proof_on_solana`: pasaba el blockhash como `str` a solders → excepción silenciosa, nunca se
+   anclaba la Proof of Sanitization. Ahora usa `Hash.from_string`.
+4. `/.well-known/x402.json` solo anunciaba el bundle 149 USDC; ahora usa `X402_PAYMENT_INFO["accepts"]`
+   (Base $0.01, Solana $0.01, bundle 149).
+5. Header de pago sin `text` devolvía 402 (el agente pagaba en bucle); ahora 422 con `expected_body`.
+6. `get_agent_budget`: una caída de Supabase tumbaba `/sanitize` (500); ahora fail-open (sin budget).
+7. `/detect` era alias del demo gratuito pese a anunciarse como pago (402 + Bazaar/402index); ahora
+   usa el mismo motor que `/redact`. **Decisión del dueño**: si se prefiere gratis, quitar de `_X402_PAID_ROUTES`.
+
+### Tests
+`tests/test_x402_flows.py` (nuevo) + `tests/test_handler_integration.py` (stub de `gpt_sanitize` actualizado
+a la firma `(text, context)`): 49 passed offline. `tests/test_live.py` requiere `TRUSTBOOST_LIVE=1` (no ejecutado).
+
+### Pendiente / sugerencias
+- Desplegar (push a main → autodeploy Render) solo tras aprobación; verificar con
+  `curl -X POST https://api.trustboost.dev/sanitize -H 'content-type: application/json' -d '{"text":"mail a@b.c","tx_hash":"TRIAL","wallet_address":"smoke"}'`.
+- README afirma F1 1.000 sobre 34 casos: matizar (muestra pequeña propia). Falta archivo LICENSE.
+- El schema Bazaar del 402 no declara el body POST (`text`, `tx_hash`): la doc de x402 no define cómo; revisar el SDK antes de añadirlo.
+- Responder a Usetested con el body esperado (`{"text": "...", "context": "general"}` + PAYMENT-SIGNATURE) para el re-test gratuito, después de desplegar.
